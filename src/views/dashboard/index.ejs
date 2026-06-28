@@ -1,0 +1,37 @@
+<%- include('../partials/header') %>
+
+<div class="card">
+  <h2>Leads</h2>
+  <p class="meta">Account: <%= accountId %></p>
+
+  <% if (leads.length === 0) { %>
+    <p class="empty">No leads yet. Miss a call to get started.</p>
+  <% } else { %>
+    <table>
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>Phone</th>
+          <th>Name</th>
+          <th>Status</th>
+          <th>Need</th>
+          <th>Created</th>
+        </tr>
+      </thead>
+      <tbody>
+        <% leads.forEach(function(lead) { %>
+          <tr>
+            <td><a href="/dashboard/leads/<%= lead.id %>">#<%= lead.id %></a></td>
+            <td><%= lead.caller_phone %></td>
+            <td><%= lead.name || '—' %></td>
+            <td><span class="badge badge-<%= lead.status %>"><%= lead.status %></span></td>
+            <td><%= lead.need_summary ? lead.need_summary.substring(0, 60) + (lead.need_summary.length > 60 ? '…' : '') : '—' %></td>
+            <td class="meta"><%= lead.created_at %></td>
+          </tr>
+        <% }); %>
+      </tbody>
+    </table>
+  <% } %>
+</div>
+
+<%- include('../partials/footer') %>

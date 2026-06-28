@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title><%= title %> — Missed Call Capture</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      margin: 0; padding: 0;
+      background: #f4f6f9; color: #1a1a2e;
+      line-height: 1.5;
+    }
+    header {
+      background: #1a1a2e; color: #fff;
+      padding: 1rem 2rem;
+    }
+    header a { color: #a8dadc; text-decoration: none; }
+    header h1 { margin: 0; font-size: 1.25rem; font-weight: 600; }
+    main { max-width: 960px; margin: 2rem auto; padding: 0 1.5rem; }
+    .card {
+      background: #fff; border-radius: 8px;
+      box-shadow: 0 1px 3px rgba(0,0,0,.08);
+      padding: 1.5rem; margin-bottom: 1.5rem;
+    }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { text-align: left; padding: .75rem 1rem; border-bottom: 1px solid #e8eaed; }
+    th { font-size: .75rem; text-transform: uppercase; letter-spacing: .05em; color: #666; }
+    tr:hover { background: #f8f9fb; }
+    a { color: #457b9d; }
+    .badge {
+      display: inline-block; padding: .2rem .6rem;
+      border-radius: 999px; font-size: .75rem; font-weight: 600;
+    }
+    .badge-new       { background: #e3f2fd; color: #1565c0; }
+    .badge-contacted { background: #fff3e0; color: #e65100; }
+    .badge-qualifying{ background: #fce4ec; color: #c62828; }
+    .badge-captured  { background: #e8f5e9; color: #2e7d32; }
+    .badge-closed    { background: #eceff1; color: #546e7a; }
+    .meta { color: #666; font-size: .875rem; }
+    .conversation { list-style: none; padding: 0; margin: 0; }
+    .conversation li {
+      padding: .75rem 1rem; margin-bottom: .5rem;
+      border-radius: 8px; max-width: 80%;
+    }
+    .conversation .inbound  { background: #e3f2fd; margin-right: auto; }
+    .conversation .outbound { background: #e8f5e9; margin-left: auto; }
+    .conversation .time { display: block; font-size: .7rem; color: #888; margin-top: .25rem; }
+    .empty { text-align: center; color: #888; padding: 3rem; }
+    dl { display: grid; grid-template-columns: 120px 1fr; gap: .5rem 1rem; }
+    dt { font-weight: 600; color: #666; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1><a href="/dashboard">Missed Call Capture</a></h1>
+  </header>
+  <main>
