@@ -2,8 +2,9 @@
  * Root router — mounts sub-routers and health check.
  */
 const express = require('express');
+const config = require('../../config/env');
 const webhookRoutes = require('./webhook.routes');
-const dashboardRoutes = require('./dashboard.routes');
+const apiRoutes = require('./api.routes');
 
 const router = express.Router();
 
@@ -12,9 +13,10 @@ router.get('/health', (_req, res) => {
 });
 
 router.use('/webhooks', webhookRoutes);
-router.use('/dashboard', dashboardRoutes);
+router.use('/api', apiRoutes);
 
-// Redirect root to dashboard
-router.get('/', (_req, res) => res.redirect('/dashboard'));
+router.get('/', (_req, res) => {
+  res.redirect(config.frontendUrl);
+});
 
 module.exports = router;

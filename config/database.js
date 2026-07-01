@@ -5,6 +5,7 @@
  *  - accounts          → tenant root
  *  - leads             → account_id FK, indexed
  *  - messages          → account_id FK, indexed (SMS conversation log)
+ *  - lead_photos       → account_id FK, MMS images tied to leads
  *  - prompt_configs    → account_id + prompt_type, indexed (editable AI prompts)
  *
  * All tenant data access goes through src/repositories/ with mandatory account scope.
@@ -19,9 +20,19 @@ if (!fs.existsSync(dbDir)) {
   fs.mkdirSync(dbDir, { recursive: true });
 }
 
+const photosDir = path.resolve(config.photosPath);
+if (!fs.existsSync(photosDir)) {
+  fs.mkdirSync(photosDir, { recursive: true });
+}
+
 const db = new Database(config.databasePath);
 db.pragma('journal_mode = WAL');
 db.pragma('foreign_keys = ON');
+
+function columnExists(table, column) {
+  const cols = db.prepare(`PRAGMA table_info(${table})`).all();
+  return cols.some((c) => c.name === column);
+}
 
 /** Migrate legacy table names. */
 function migrateSchema() {
@@ -33,6 +44,38 @@ function migrateSchema() {
   if (tables.includes('conversations') && !tables.includes('messages')) {
     db.exec('ALTER TABLE conversations RENAME TO messages');
   }
+}
+
+/** Wave 2 — scheduling fields, photos table. */
+function migrateWave2Schema() {
+  const leadColumns = [
+    ['preferred_time', 'TEXT'],
+    ['location', 'TEXT'],
+    ['appointment_type', 'TEXT'],
+    ['confirmed_time', 'TEXT'],
+  ];
+
+  for (const [name, type] of leadColumns) {
+    if (!columnExists('leads', name)) {
+      db.exec(`ALTER TABLE leads ADD COLUMN ${name} ${type}`);
+    }
+  }
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS lead_photos (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      account_id TEXT NOT NULL,
+      lead_id INTEGER NOT NULL,
+      file_path TEXT NOT NULL,
+      mime_type TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (account_id) REFERENCES accounts(id),
+      FOREIGN KEY (lead_id) REFERENCES leads(id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_lead_photos_account ON lead_photos(account_id);
+    CREATE INDEX IF NOT EXISTS idx_lead_photos_lead ON lead_photos(account_id, lead_id);
+  `);
 }
 
 function initializeSchema() {
@@ -54,6 +97,10 @@ function initializeSchema() {
       name TEXT,
       email TEXT,
       need_summary TEXT,
+      preferred_time TEXT,
+      location TEXT,
+      appointment_type TEXT,
+      confirmed_time TEXT,
       call_sid TEXT,
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       updated_at TEXT NOT NULL DEFAULT (datetime('now')),
@@ -92,6 +139,8 @@ function initializeSchema() {
 
     CREATE INDEX IF NOT EXISTS idx_prompt_configs_account ON prompt_configs(account_id);
   `);
+
+  migrateWave2Schema();
 }
 
 function loadSeedJson(filename) {
@@ -137,8 +186,42 @@ function seedPromptConfigs() {
   }
 }
 
+/**
+ * Upsert Wave 2 prompts (extended qualify + confirmation) for existing installs.
+ * qualify is updated; confirmation is inserted if missing.
+ */
+function seedWave2Prompts() {
+  const prompts = loadSeedJson('prompts.json');
+  if (!prompts) return;
+
+  const upsert = db.prepare(`
+    INSERT INTO prompt_configs (account_id, prompt_type, system_prompt, user_prompt)
+    VALUES (@accountId, @promptType, @systemPrompt, @userPrompt)
+    ON CONFLICT(account_id, prompt_type) DO UPDATE SET
+      system_prompt = excluded.system_prompt,
+      user_prompt = excluded.user_prompt,
+      updated_at = datetime('now')
+  `);
+
+  const wave2Types = ['qualify', 'confirmation'];
+  const accountIds = db.prepare('SELECT id FROM accounts').all().map((a) => a.id);
+
+  for (const accountId of accountIds) {
+    for (const promptType of wave2Types) {
+      if (!prompts[promptType]) continue;
+      upsert.run({
+        accountId,
+        promptType,
+        systemPrompt: prompts[promptType].system,
+        userPrompt: prompts[promptType].user,
+      });
+    }
+  }
+}
+
 initializeSchema();
 seedDemoAccount();
 seedPromptConfigs();
+seedWave2Prompts();
 
 module.exports = db;

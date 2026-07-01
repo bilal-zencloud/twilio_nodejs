@@ -29,6 +29,11 @@ function loadPrompt(accountId, promptType) {
   return { system: row.system_prompt, user: row.user_prompt };
 }
 
+function parseJsonResponse(raw) {
+  const jsonText = raw.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
+  return JSON.parse(jsonText);
+}
+
 /**
  * Generate the initial greeting SMS after a missed call.
  */
@@ -54,12 +59,14 @@ async function processQualifyingReply({
   businessName,
   conversationHistory,
   callerMessage,
+  photoCount = 0,
 }) {
   const prompt = loadPrompt(accountId, PromptConfigRepository.PROMPT_TYPES.QUALIFY);
   const vars = {
     business_name: businessName,
     conversation_history: conversationHistory,
     caller_message: callerMessage,
+    photo_count: String(photoCount),
   };
 
   const response = await getClient().messages.create({
@@ -69,9 +76,44 @@ async function processQualifyingReply({
     messages: [{ role: 'user', content: interpolate(prompt.user, vars) }],
   });
 
-  const raw = response.content[0].text.trim();
-  const jsonText = raw.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
-  return JSON.parse(jsonText);
+  return parseJsonResponse(response.content[0].text.trim());
 }
 
-module.exports = { generateGreeting, processQualifyingReply, loadPrompt };
+/**
+ * Generate confirmation SMS when owner confirms a lead from the dashboard.
+ */
+async function generateConfirmationSms({
+  accountId,
+  businessName,
+  appointmentType,
+  customerName,
+  needSummary,
+  location,
+  preferredTime,
+}) {
+  const prompt = loadPrompt(accountId, PromptConfigRepository.PROMPT_TYPES.CONFIRMATION);
+  const vars = {
+    business_name: businessName,
+    appointment_type: appointmentType,
+    customer_name: customerName || 'there',
+    need_summary: needSummary || 'your vehicle',
+    location,
+    preferred_time: preferredTime,
+  };
+
+  const response = await getClient().messages.create({
+    model: config.anthropic.model,
+    max_tokens: 256,
+    system: interpolate(prompt.system, vars),
+    messages: [{ role: 'user', content: interpolate(prompt.user, vars) }],
+  });
+
+  return response.content[0].text.trim();
+}
+
+module.exports = {
+  generateGreeting,
+  processQualifyingReply,
+  generateConfirmationSms,
+  loadPrompt,
+};

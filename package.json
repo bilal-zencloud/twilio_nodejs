@@ -1,11 +1,14 @@
 {
   "name": "twilio_nodejs",
   "version": "1.0.0",
-  "description": "Missed-call capture loop with Twilio SMS, Anthropic AI, and SQLite dashboard",
+  "description": "Missed-call capture loop with Twilio SMS, Anthropic AI, and Next.js dashboard",
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
-    "dev": "nodemon index.js",
+    "dev": "concurrently -n api,web -c blue,green \"npm run dev:api\" \"npm run dev:frontend\"",
+    "dev:api": "nodemon index.js",
+    "dev:frontend": "npm run dev --prefix frontend",
+    "build:frontend": "npm run build --prefix frontend",
     "setup:twilio": "node scripts/setup-twilio-webhooks.js",
     "verify:caller": "node scripts/verify-caller.js",
     "check:sms": "node scripts/check-sms-delivery.js",
@@ -16,13 +19,13 @@
   "license": "ISC",
   "type": "commonjs",
   "devDependencies": {
+    "concurrently": "^9.2.1",
     "nodemon": "^3.1.14"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.106.0",
     "better-sqlite3": "^12.11.1",
     "dotenv": "^17.4.2",
-    "ejs": "^6.0.1",
     "express": "^5.2.1",
     "twilio": "^6.0.2"
   }

@@ -13,11 +13,12 @@ When a call goes unanswered, this module texts the caller back with an AI-genera
 5. [Twilio webhook configuration](#twilio-webhook-configuration)
 6. [Business name (dynamic, editable)](#business-name-dynamic-editable)
 7. [AI prompts (editable per tenant)](#ai-prompts-editable-per-tenant)
-8. [Viewing the database](#viewing-the-database)
-9. [Testing the full flow](#testing-the-full-flow)
-10. [Useful npm scripts](#useful-npm-scripts)
-11. [Troubleshooting](#troubleshooting)
-12. [Architecture overview](#architecture-overview)
+8. [Wave 2 — Scheduling, photos, and confirmation](#wave-2--scheduling-photos-and-confirmation)
+9. [Viewing the database](#viewing-the-database)
+10. [Testing the full flow](#testing-the-full-flow)
+11. [Useful npm scripts](#useful-npm-scripts)
+12. [Troubleshooting](#troubleshooting)
+13. [Architecture overview](#architecture-overview)
 
 ---
 
@@ -48,7 +49,9 @@ Open `.env` in the project root and set each variable:
 | `PORT` | No | Port the app runs on | `3000` |
 | `APP_URL` | **Yes** | Public URL Twilio uses to reach your app. See [ngrok section](#ngrok-setup-required-for-local-development). | `https://abc123.ngrok-free.dev` |
 | `DATABASE_PATH` | No | SQLite database file location | `./data/leads.db` |
+| `PHOTOS_PATH` | No | Directory for inbound MMS photos | `./data/photos` |
 | `DEFAULT_ACCOUNT_ID` | No | Tenant ID for the demo business | `demo-account-1` |
+| `FRONTEND_URL` | No | Next.js dashboard URL (CORS) | `http://localhost:3001` |
 | `TWILIO_ACCOUNT_SID` | **Yes** | From Twilio Console → Account Info | `ACxxxxxxxx` |
 | `TWILIO_AUTH_TOKEN` | **Yes** | From Twilio Console → Account Info | `your_auth_token` |
 | `TWILIO_PHONE_NUMBER` | **Yes** | Your Twilio number in E.164 format | `+19032807223` |
@@ -81,10 +84,16 @@ npm run dev
 ## Running the app locally
 
 ```bash
-# 1. Install dependencies (first time only)
+# 1. Install backend dependencies (first time only)
 npm install
 
-# 2. Start the development server
+# 2. Install frontend dependencies (first time only)
+npm install --prefix frontend
+
+# 3. Copy frontend env (first time only)
+cp frontend/.env.local.example frontend/.env.local
+
+# 4. Start both API (port 3000) and Next.js dashboard (port 3001)
 npm run dev
 ```
 
@@ -92,11 +101,19 @@ You should see:
 
 ```
 Missed Call Capture running on http://localhost:3000 (pid XXXXX)
-Dashboard:  http://localhost:3000/dashboard
+Dashboard:  http://localhost:3001
+API:        http://localhost:3000/api
 Health:     http://localhost:3000/health
 ```
 
-Open the dashboard: [http://localhost:3000/dashboard](http://localhost:3000/dashboard)
+Open the dashboard: [http://localhost:3001](http://localhost:3001)
+
+Run API or frontend separately if needed:
+
+```bash
+npm run dev:api        # Express API + webhooks only (port 3000)
+npm run dev:frontend   # Next.js dashboard only (port 3001)
+```
 
 Keep this terminal running. You need **two terminals** for local development (app + ngrok).
 
@@ -260,7 +277,10 @@ AI behavior (greeting tone, qualifying questions, field extraction) is stored in
 | `prompt_type` | Used when |
 |---|---|
 | `greeting` | First SMS after a missed call |
-| `qualify` | Processing the caller's SMS reply |
+| `qualify` | Processing the caller's SMS replies — captures name, need, preferred time, location |
+| `confirmation` | Owner confirms from dashboard — sends appointment confirmation SMS |
+
+The qualify prompt uses **mobile-service wording** (we come to the customer). It returns JSON with `extracted_preferred_time`, `extracted_location`, and `scheduling_complete` when both time and location are captured.
 
 ### View current prompts
 
@@ -287,10 +307,67 @@ WHERE account_id = 'demo-account-1' AND prompt_type = 'greeting';
 | `{{business_name}}` | Value from `accounts.name` |
 | `{{conversation_history}}` | Previous SMS thread (qualify prompt only) |
 | `{{caller_message}}` | Latest inbound SMS (qualify prompt only) |
+| `{{photo_count}}` | Number of damage photos received (qualify prompt only) |
+| `{{appointment_type}}` | `inspection` or `repair` (confirmation prompt only) |
+| `{{customer_name}}` | Lead name (confirmation prompt only) |
+| `{{need_summary}}` | Damage/need description (confirmation prompt only) |
+| `{{location}}` | Where the vehicle will be (confirmation prompt only) |
+| `{{preferred_time}}` | Customer's preferred day/time (confirmation prompt only) |
 
 ### Default seed
 
-On first run, prompts are seeded from `config/prompts.json`. After that, edit the database — the JSON file is only used for initial seeding.
+On first run, prompts are seeded from `config/prompts.json`. After that, edit the database — the JSON file is only used for initial seeding. On startup, Wave 2 prompts (`qualify`, `confirmation`) are upserted for all accounts so existing installs pick up scheduling and confirmation templates.
+
+---
+
+## Wave 2 — Scheduling, photos, and confirmation
+
+After name and need are captured, the SMS conversation continues to collect:
+
+1. **Preferred day/time** — mobile wording (e.g. *"When works best for us to come out to you?"*)
+2. **Location** — address or area where the vehicle will be
+3. **Damage photos** — customer texts MMS images; stored and shown on the lead detail page
+
+When **time + location + name + need** are all captured, the lead moves to **`pending_confirmation`**.
+
+### Lead fields (Wave 2)
+
+| Field | Description |
+|---|---|
+| `preferred_time` | Caller's preferred day/time (free text, their own words) |
+| `location` | Address or area where the vehicle will be |
+| `appointment_type` | `inspection` or `repair` — set by owner on confirm |
+| `confirmed_time` | Final scheduled time (may differ from preferred_time if owner adjusts) |
+
+Photos are stored in `lead_photos` (DB) and on disk under `PHOTOS_PATH` (default `./data/photos/{account_id}/{lead_id}/`).
+
+### Lead status flow
+
+```
+new → contacted → qualifying → pending_confirmation → confirmed
+                                      ↑
+                         (time + location + name + need captured)
+```
+
+The owner reviews **pending confirmation** leads on the dashboard (highlighted at the top of the list), views photos, chooses **inspection** or **repair**, optionally adjusts the time, and clicks **Confirm & send SMS**. That sends an AI-generated confirmation message (from the `confirmation` prompt) and moves the lead to **`confirmed`**.
+
+### MMS photo capture
+
+- Inbound MMS images are downloaded from Twilio and saved per lead (account-scoped).
+- Photos appear in a gallery on the lead detail page.
+- No AI analysis of photos in this milestone — receive, store, and display only.
+
+### Confirm from dashboard
+
+1. Open [http://localhost:3001](http://localhost:3001)
+2. Click a **pending confirmation** lead
+3. Review time, location, conversation, and photos
+4. Choose **Repair** or **Inspection**, adjust time if needed, click **Confirm & send SMS**
+
+Confirmation SMS examples (generated from editable config, not hardcoded):
+
+- **Repair:** *"You're all set — we'll come out to [location] on [time] to take care of your [need]. See you then!"*
+- **Inspection:** *"You're all set — we'll come out to [location] on [time] to take a look at the damage. See you then!"*
 
 ---
 
@@ -349,7 +426,7 @@ You need **three things running**:
    [missed-call] Lead #1 created for +1...
    [missed-call] Greeting SMS sent to +1...
    ```
-4. Open [http://localhost:3000/dashboard](http://localhost:3000/dashboard) — lead should appear
+4. Open [http://localhost:3001](http://localhost:3001) — lead should appear
 5. Reply to the SMS from the **same phone** that received it
 6. Dashboard should update with name/need and status `captured`
 
@@ -430,15 +507,18 @@ Numero can **receive** SMS but often **cannot send replies back** to Twilio. For
 ## Architecture overview
 
 ```
-index.js                  → entry point
+index.js                  → API entry point (Express)
 src/
-  app.js                  → Express setup
+  app.js                  → Express setup (webhooks + JSON API)
   routes/                 → URL routing
-  controllers/            → webhook + dashboard handlers
+  controllers/            → webhook + API handlers
   repositories/           → tenant-scoped data access (account_id enforced)
   services/               → AI, SMS, missed-call logic
-  middleware/             → Twilio signature validation, logging
-  views/                    → EJS dashboard
+  middleware/             → Twilio signature validation, CORS, logging
+frontend/                 → Next.js dashboard (React + Tailwind)
+  app/                    → pages (lead list, lead detail)
+  components/             → interactive UI components
+  lib/                    → API client + types
 config/
   env.js                  → reads .env
   database.js             → schema, migrations, seed
@@ -446,6 +526,7 @@ config/
   prompts.json            → seed AI prompts
 data/
   leads.db                → SQLite database (created on first run)
+  photos/                 → MMS images by account/lead (created on first run)
 scripts/
   setup-twilio-webhooks.js
   verify-caller.js
@@ -456,8 +537,9 @@ scripts/
 
 Every tenant-scoped table has an `account_id` foreign key (indexed):
 
-- `leads` — one lead per phone number per account
+- `leads` — one lead per phone number per account (includes scheduling fields)
 - `messages` — SMS log
+- `lead_photos` — MMS images tied to leads
 - `prompt_configs` — editable AI prompts (`account_id` + `prompt_type`)
 
 All data access goes through `forAccount(accountId)` — no query runs without an explicit tenant scope. The demo uses one account (`demo-account-1`); adding tenants requires no schema changes.
@@ -465,19 +547,25 @@ All data access goes through `forAccount(accountId)` — no query runs without a
 ### Lead status flow
 
 ```
-new → contacted → qualifying → captured
+new → contacted → qualifying → pending_confirmation → confirmed
 ```
+
+See [Wave 2 — Scheduling, photos, and confirmation](#wave-2--scheduling-photos-and-confirmation) for details.
 
 ### API routes
 
 | Method | Path | Purpose |
 |---|---|---|
 | GET | `/health` | Health check |
-| GET | `/dashboard` | Lead list |
-| GET | `/dashboard/leads/:id` | Lead detail + messages |
+| GET | `/api/leads` | Lead list + stats (JSON) |
+| GET | `/api/leads/:id` | Lead detail, messages, photos (JSON) |
+| POST | `/api/leads/:id/confirm` | Owner confirms — sends confirmation SMS |
+| GET | `/api/leads/:id/photos/:photoId` | Serve MMS photo (tenant-scoped) |
 | POST | `/webhooks/voice/incoming` | Incoming call → reject + greeting SMS |
 | POST | `/webhooks/voice/status` | Call status callback (backup) |
-| POST | `/webhooks/sms/inbound` | Inbound SMS → AI capture |
+| POST | `/webhooks/sms/inbound` | Inbound SMS/MMS → AI capture + photo storage |
+
+The Next.js dashboard at `http://localhost:3001` consumes the `/api/*` endpoints.
 
 ---
 

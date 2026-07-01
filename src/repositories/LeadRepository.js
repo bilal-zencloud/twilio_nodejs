@@ -9,11 +9,19 @@ const STATUSES = {
   CONTACTED: 'contacted',
   QUALIFYING: 'qualifying',
   CAPTURED: 'captured',
+  PENDING_CONFIRMATION: 'pending_confirmation',
+  CONFIRMED: 'confirmed',
   CLOSED: 'closed',
+};
+
+const APPOINTMENT_TYPES = {
+  INSPECTION: 'inspection',
+  REPAIR: 'repair',
 };
 
 class LeadRepository extends TenantScope {
   static STATUSES = STATUSES;
+  static APPOINTMENT_TYPES = APPOINTMENT_TYPES;
 
   create({ callerPhone, callSid }) {
     const result = db
@@ -57,13 +65,28 @@ class LeadRepository extends TenantScope {
     return db
       .prepare(
         `SELECT * FROM leads WHERE account_id = ?
-         ORDER BY created_at DESC`
+         ORDER BY
+           CASE status
+             WHEN 'pending_confirmation' THEN 0
+             ELSE 1
+           END,
+           created_at DESC`
       )
       .all(this.accountId);
   }
 
   update(id, fields) {
-    const allowed = ['status', 'name', 'email', 'need_summary', 'call_sid'];
+    const allowed = [
+      'status',
+      'name',
+      'email',
+      'need_summary',
+      'preferred_time',
+      'location',
+      'appointment_type',
+      'confirmed_time',
+      'call_sid',
+    ];
     const sets = [];
     const params = { accountId: this.accountId, id };
 

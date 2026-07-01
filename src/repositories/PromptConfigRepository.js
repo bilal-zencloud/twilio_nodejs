@@ -1,6 +1,6 @@
 /**
  * Prompt config repository — editable AI prompts per tenant.
- * Keyed by account_id + prompt_type (e.g. greeting, qualify).
+ * Keyed by account_id + prompt_type (e.g. greeting, qualify, confirmation).
  */
 const db = require('../../config/database');
 const TenantScope = require('./TenantScope');
@@ -8,6 +8,7 @@ const TenantScope = require('./TenantScope');
 const PROMPT_TYPES = {
   GREETING: 'greeting',
   QUALIFY: 'qualify',
+  CONFIRMATION: 'confirmation',
 };
 
 class PromptConfigRepository extends TenantScope {

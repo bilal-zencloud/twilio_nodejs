@@ -3,3 +3,5 @@ data/
 .env
 *.db
 .DS_Store
+frontend/.next/
+frontend/.env.local
