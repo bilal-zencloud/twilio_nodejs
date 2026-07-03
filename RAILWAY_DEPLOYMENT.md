@@ -64,6 +64,7 @@ In `preferredpdr-api` → **Variables**, add these. Copy the secret values from 
 Do not set `PORT`; Railway provides it.
 
 ```env
+NODE_VERSION=22
 NODE_ENV=production
 
 # URLs
@@ -155,6 +156,7 @@ Railway should pick up `frontend/railway.json`.
 In `preferredpdr-web` → **Variables**:
 
 ```env
+NODE_VERSION=22
 NODE_ENV=production
 API_PROXY_TARGET=https://<your-api-service-domain>
 API_SERVER_URL=https://<your-api-service-domain>
