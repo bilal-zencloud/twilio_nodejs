@@ -3,9 +3,10 @@
  *
  * Architecture:
  *  - accounts          → tenant root
+ *  - admins            → dashboard login (nullable account_id: null = global, else per-tenant)
  *  - leads             → account_id FK, indexed
  *  - messages          → account_id FK, indexed (SMS conversation log)
- *  - lead_photos       → account_id FK, MMS images tied to leads
+ *  - lead_photos       → account_id FK, MMS images tied to leads (S3 storage keys)
  *  - prompt_configs    → account_id + prompt_type, indexed (editable AI prompts)
  *
  * All tenant data access goes through src/repositories/ with mandatory account scope.
@@ -13,16 +14,12 @@
 const Database = require('better-sqlite3');
 const path = require('path');
 const fs = require('fs');
+const bcrypt = require('bcrypt');
 const config = require('./env');
 
 const dbDir = path.dirname(path.resolve(config.databasePath));
 if (!fs.existsSync(dbDir)) {
   fs.mkdirSync(dbDir, { recursive: true });
-}
-
-const photosDir = path.resolve(config.photosPath);
-if (!fs.existsSync(photosDir)) {
-  fs.mkdirSync(photosDir, { recursive: true });
 }
 
 const db = new Database(config.databasePath);
@@ -76,6 +73,28 @@ function migrateWave2Schema() {
     CREATE INDEX IF NOT EXISTS idx_lead_photos_account ON lead_photos(account_id);
     CREATE INDEX IF NOT EXISTS idx_lead_photos_lead ON lead_photos(account_id, lead_id);
   `);
+}
+
+/** Milestone 3 — admin login + S3 photo storage. */
+function migrateAdminsAndStorage() {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS admins (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      account_id TEXT,
+      email TEXT NOT NULL UNIQUE COLLATE NOCASE,
+      password_hash TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (account_id) REFERENCES accounts(id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_admins_account ON admins(account_id);
+  `);
+
+  // Storage backend column for lead_photos ('local' legacy | 's3').
+  if (!columnExists('lead_photos', 'storage')) {
+    db.exec("ALTER TABLE lead_photos ADD COLUMN storage TEXT NOT NULL DEFAULT 'local'");
+  }
 }
 
 function initializeSchema() {
@@ -141,6 +160,7 @@ function initializeSchema() {
   `);
 
   migrateWave2Schema();
+  migrateAdminsAndStorage();
 }
 
 function loadSeedJson(filename) {
@@ -186,10 +206,6 @@ function seedPromptConfigs() {
   }
 }
 
-/**
- * Upsert Wave 2 prompts (extended qualify + confirmation) for existing installs.
- * qualify is updated; confirmation is inserted if missing.
- */
 function seedWave2Prompts() {
   const prompts = loadSeedJson('prompts.json');
   if (!prompts) return;
@@ -219,9 +235,38 @@ function seedWave2Prompts() {
   }
 }
 
+/**
+ * Seed the first admin from ADMIN_EMAIL / ADMIN_PASSWORD on first run.
+ * Only runs if no admin exists. Global admin (account_id NULL) for now.
+ */
+function seedDefaultAdmin() {
+  const existing = db.prepare('SELECT COUNT(*) AS c FROM admins').get().c;
+  if (existing > 0) return;
+
+  const email = config.auth.defaultAdminEmail;
+  const password = config.auth.defaultAdminPassword;
+
+  if (!email || !password) {
+    console.warn('[db] No ADMIN_EMAIL/ADMIN_PASSWORD set — skipping default admin seed.');
+    return;
+  }
+
+  const passwordHash = bcrypt.hashSync(password, 10);
+  db.prepare(
+    `INSERT INTO admins (account_id, email, password_hash)
+     VALUES (NULL, @email, @passwordHash)`
+  ).run({ email, passwordHash });
+
+  console.log(`[db] Seeded default admin: ${email}`);
+  if (password === 'changeme') {
+    console.warn('[db] ⚠  Default password in use — change it via the dashboard.');
+  }
+}
+
 initializeSchema();
 seedDemoAccount();
 seedPromptConfigs();
 seedWave2Prompts();
+seedDefaultAdmin();
 
 module.exports = db;

@@ -1,9 +1,10 @@
 /**
- * Photo service — download Twilio MMS media and store on disk (tenant-scoped paths).
+ * Photo service — download Twilio MMS media and store in S3 (tenant-scoped keys).
+ * Dashboard viewing is proxied through an authenticated API route; direct S3
+ * object URLs are never returned to the browser.
  */
-const fs = require('fs');
-const path = require('path');
 const config = require('../../config/env');
+const s3 = require('./s3.service');
 
 const MIME_EXTENSIONS = {
   'image/jpeg': '.jpg',
@@ -13,26 +14,13 @@ const MIME_EXTENSIONS = {
   'image/webp': '.webp',
 };
 
-function getPhotosRoot() {
-  return path.resolve(config.photosPath);
-}
-
-function resolvePhotoPath(relativePath) {
-  const fullPath = path.join(getPhotosRoot(), relativePath);
-  const root = getPhotosRoot();
-  if (!fullPath.startsWith(root)) {
-    throw new Error('Invalid photo path');
-  }
-  return fullPath;
-}
-
 function extensionForMime(mimeType) {
   if (!mimeType) return '.jpg';
   const normalized = mimeType.toLowerCase().split(';')[0].trim();
   return MIME_EXTENSIONS[normalized] || '.jpg';
 }
 
-/** Download media from Twilio (requires Basic auth). */
+/** Download media from Twilio (requires Basic auth against the MediaUrl). */
 async function downloadTwilioMedia(mediaUrl) {
   const auth = Buffer.from(
     `${config.twilio.accountSid}:${config.twilio.authToken}`
@@ -51,21 +39,37 @@ async function downloadTwilioMedia(mediaUrl) {
   return { buffer, contentType };
 }
 
+function buildStorageKey({ accountId, leadId, mimeType }) {
+  const filename = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}${extensionForMime(mimeType)}`;
+  return `accounts/${accountId}/leads/${leadId}/${filename}`;
+}
+
 /**
- * Save an inbound MMS image for a lead.
- * @returns {{ relativePath: string, mimeType: string }}
+ * Save an inbound MMS image for a lead: download from Twilio, upload to S3.
+ * @returns {{ storageKey: string, mimeType: string, storage: 's3' }}
  */
 async function saveLeadPhoto({ accountId, leadId, mediaUrl, mimeType }) {
   const { buffer, contentType } = await downloadTwilioMedia(mediaUrl);
   const resolvedMime = mimeType || contentType || 'image/jpeg';
-  const filename = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}${extensionForMime(resolvedMime)}`;
-  const relativePath = path.join(accountId, String(leadId), filename);
-  const dir = path.dirname(resolvePhotoPath(relativePath));
+  const storageKey = buildStorageKey({ accountId, leadId, mimeType: resolvedMime });
 
-  fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(resolvePhotoPath(relativePath), buffer);
+  await s3.uploadObject({
+    key: storageKey,
+    body: buffer,
+    contentType: resolvedMime,
+  });
 
-  return { relativePath, mimeType: resolvedMime };
+  return { storageKey, mimeType: resolvedMime, storage: 's3' };
+}
+
+/** Load a stored photo object for an authenticated API response. */
+async function getPhotoObject(photo) {
+  if (photo.storage === 's3') {
+    return s3.getObject(photo.file_path);
+  }
+
+  // Legacy local files are no longer served.
+  return null;
 }
 
 /** Parse Twilio inbound MMS fields from webhook body. */
@@ -85,8 +89,7 @@ function parseInboundMedia(body) {
 }
 
 module.exports = {
-  getPhotosRoot,
-  resolvePhotoPath,
   saveLeadPhoto,
+  getPhotoObject,
   parseInboundMedia,
 };

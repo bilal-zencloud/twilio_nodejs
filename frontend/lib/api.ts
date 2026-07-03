@@ -1,14 +1,49 @@
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3000';
-const DEFAULT_ACCOUNT_ID =
-  process.env.NEXT_PUBLIC_DEFAULT_ACCOUNT_ID || 'demo-account-1';
+import type {
+  ConfirmPayload,
+  Lead,
+  LeadDetailResponse,
+  LeadsResponse,
+} from './types';
 
-export function getAccountId(): string {
-  return DEFAULT_ACCOUNT_ID;
+export const CLIENT_API_URL = process.env.NEXT_PUBLIC_API_URL || '';
+export const SERVER_API_URL =
+  process.env.API_SERVER_URL ||
+  process.env.API_PROXY_TARGET ||
+  process.env.NEXT_PUBLIC_API_URL ||
+  'http://localhost:3000';
+
+/**
+ * Server-side fetch: forwards the browser's session cookie to the API.
+ * Pass an incoming cookie string (from Next.js `cookies()`) for RSC calls.
+ */
+export async function serverFetch<T>(path: string, cookie: string): Promise<T> {
+  const res = await fetch(`${SERVER_API_URL}${path}`, {
+    headers: {
+      'Content-Type': 'application/json',
+      cookie,
+    },
+    cache: 'no-store',
+  });
+
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    const err = new Error(body.error || `Request failed (${res.status})`) as Error & {
+      status?: number;
+    };
+    err.status = res.status;
+    throw err;
+  }
+
+  return res.json();
 }
 
-async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${API_URL}${path}`, {
+/**
+ * Client-side fetch: browser sends cookies automatically with credentials: 'include'.
+ */
+async function clientFetch<T>(path: string, init?: RequestInit): Promise<T> {
+  const res = await fetch(`${CLIENT_API_URL}${path}`, {
     ...init,
+    credentials: 'include',
     headers: {
       'Content-Type': 'application/json',
       ...init?.headers,
@@ -18,35 +53,58 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
 
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
-    throw new Error(body.error || `Request failed (${res.status})`);
+    const err = new Error(body.error || `Request failed (${res.status})`) as Error & {
+      status?: number;
+    };
+    err.status = res.status;
+    throw err;
   }
 
   return res.json();
 }
 
-export async function fetchLeads(accountId = getAccountId()) {
-  return apiFetch<import('./types').LeadsResponse>(
-    `/api/leads?account_id=${encodeURIComponent(accountId)}`
-  );
+export async function fetchLeadsServer(cookie: string) {
+  return serverFetch<LeadsResponse>('/api/leads', cookie);
 }
 
-export async function fetchLead(id: string | number, accountId = getAccountId()) {
-  return apiFetch<import('./types').LeadDetailResponse>(
-    `/api/leads/${id}?account_id=${encodeURIComponent(accountId)}`
-  );
+export async function fetchLeadServer(id: string | number, cookie: string) {
+  return serverFetch<LeadDetailResponse>(`/api/leads/${id}`, cookie);
 }
 
-export async function confirmLead(
-  id: string | number,
-  payload: import('./types').ConfirmPayload
-) {
-  return apiFetch<{ success: boolean; lead: import('./types').Lead }>(
-    `/api/leads/${id}/confirm`,
-    {
-      method: 'POST',
-      body: JSON.stringify(payload),
-    }
-  );
+export async function confirmLead(id: string | number, payload: ConfirmPayload) {
+  return clientFetch<{ success: boolean; lead: Lead }>(`/api/leads/${id}/confirm`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
 }
 
-export { API_URL, DEFAULT_ACCOUNT_ID };
+export async function login(email: string, password: string) {
+  return clientFetch<{ admin: AdminProfile }>('/api/auth/login', {
+    method: 'POST',
+    body: JSON.stringify({ email, password }),
+  });
+}
+
+export async function logout() {
+  return clientFetch<{ success: boolean }>('/api/auth/logout', { method: 'POST' });
+}
+
+export async function changePassword(currentPassword: string, newPassword: string) {
+  return clientFetch<{ success: boolean }>('/api/auth/change-password', {
+    method: 'POST',
+    body: JSON.stringify({
+      current_password: currentPassword,
+      new_password: newPassword,
+    }),
+  });
+}
+
+export interface AdminProfile {
+  id: number;
+  email: string;
+  account_id: string | null;
+}
+
+export async function fetchMeServer(cookie: string) {
+  return serverFetch<{ admin: AdminProfile }>('/api/auth/me', cookie);
+}

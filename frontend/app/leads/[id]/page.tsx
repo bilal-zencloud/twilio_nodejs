@@ -1,7 +1,8 @@
 import Link from 'next/link';
 import { AppHeader } from '@/components/app-header';
 import { LeadDetail } from '@/components/lead-detail';
-import { fetchLead } from '@/lib/api';
+import { fetchLeadServer } from '@/lib/api';
+import { getCookieHeader, getCurrentAdmin } from '@/lib/server-auth';
 
 interface PageProps {
   params: Promise<{ id: string }>;
@@ -9,13 +10,15 @@ interface PageProps {
 
 export default async function LeadPage({ params }: PageProps) {
   const { id } = await params;
+  const cookie = await getCookieHeader();
+  const admin = await getCurrentAdmin();
 
   try {
-    const data = await fetchLead(id);
+    const data = await fetchLeadServer(id, cookie);
 
     return (
       <>
-        <AppHeader />
+        <AppHeader admin={admin} />
         <main className="mx-auto max-w-7xl flex-1 px-4 py-8 sm:px-6 lg:px-8">
           <LeadDetail
             initialLead={data.lead}
@@ -30,7 +33,7 @@ export default async function LeadPage({ params }: PageProps) {
   } catch {
     return (
       <>
-        <AppHeader />
+        <AppHeader admin={admin} />
         <main className="mx-auto max-w-7xl flex-1 px-4 py-16 text-center">
           <h1 className="text-xl font-semibold text-slate-900">Lead not found</h1>
           <p className="mt-2 text-sm text-slate-500">This lead may have been removed or does not exist.</p>

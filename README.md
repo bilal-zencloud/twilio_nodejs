@@ -9,16 +9,19 @@ When a call goes unanswered, this module texts the caller back with an AI-genera
 1. [Prerequisites](#prerequisites)
 2. [Environment setup (.env)](#environment-setup-env)
 3. [Running the app locally](#running-the-app-locally)
-4. [ngrok setup (required for local development)](#ngrok-setup-required-for-local-development)
-5. [Twilio webhook configuration](#twilio-webhook-configuration)
-6. [Business name (dynamic, editable)](#business-name-dynamic-editable)
-7. [AI prompts (editable per tenant)](#ai-prompts-editable-per-tenant)
-8. [Wave 2 — Scheduling, photos, and confirmation](#wave-2--scheduling-photos-and-confirmation)
-9. [Viewing the database](#viewing-the-database)
-10. [Testing the full flow](#testing-the-full-flow)
-11. [Useful npm scripts](#useful-npm-scripts)
-12. [Troubleshooting](#troubleshooting)
-13. [Architecture overview](#architecture-overview)
+4. [Admin authentication](#admin-authentication)
+5. [AWS S3 photo storage](#aws-s3-photo-storage)
+6. [ngrok setup (required for local development)](#ngrok-setup-required-for-local-development)
+7. [Twilio webhook configuration](#twilio-webhook-configuration)
+8. [Business name (dynamic, editable)](#business-name-dynamic-editable)
+9. [AI prompts (editable per tenant)](#ai-prompts-editable-per-tenant)
+10. [Wave 2 — Scheduling, photos, and confirmation](#wave-2--scheduling-photos-and-confirmation)
+11. [Viewing the database](#viewing-the-database)
+12. [Testing the full flow](#testing-the-full-flow)
+13. [Useful npm scripts](#useful-npm-scripts)
+14. [Troubleshooting](#troubleshooting)
+15. [Railway deployment](#railway-deployment)
+16. [Architecture overview](#architecture-overview)
 
 ---
 
@@ -49,7 +52,6 @@ Open `.env` in the project root and set each variable:
 | `PORT` | No | Port the app runs on | `3000` |
 | `APP_URL` | **Yes** | Public URL Twilio uses to reach your app. See [ngrok section](#ngrok-setup-required-for-local-development). | `https://abc123.ngrok-free.dev` |
 | `DATABASE_PATH` | No | SQLite database file location | `./data/leads.db` |
-| `PHOTOS_PATH` | No | Directory for inbound MMS photos | `./data/photos` |
 | `DEFAULT_ACCOUNT_ID` | No | Tenant ID for the demo business | `demo-account-1` |
 | `FRONTEND_URL` | No | Next.js dashboard URL (CORS) | `http://localhost:3001` |
 | `TWILIO_ACCOUNT_SID` | **Yes** | From Twilio Console → Account Info | `ACxxxxxxxx` |
@@ -59,6 +61,17 @@ Open `.env` in the project root and set each variable:
 | `TWILIO_MESSAGING_SERVICE_SID` | No | Optional — use after A2P 10DLC registration | `MGxxxxxxxx` |
 | `ANTHROPIC_API_KEY` | **Yes** | From Anthropic Console | `sk-ant-...` |
 | `ANTHROPIC_MODEL` | No | Claude model ID | `claude-sonnet-4-6` |
+| `AWS_REGION` | **Yes** | S3 region | `us-east-2` |
+| `AWS_ACCESS_KEY_ID` | **Yes** | S3 IAM access key | `AKIA...` |
+| `AWS_SECRET_ACCESS_KEY` | **Yes** | S3 IAM secret | `...` |
+| `S3_BUCKET` | **Yes** | Private S3 bucket for MMS photos | `preferredpdr-photos` |
+| `JWT_SECRET` | **Yes** | Session token signing secret (64+ chars) | random hex |
+| `JWT_EXPIRY` | No | Absolute token lifetime | `7d` |
+| `SESSION_INACTIVITY_MINUTES` | No | Logout after this many idle minutes | `15` |
+| `ADMIN_EMAIL` | **Yes**† | Initial admin email (seeded on first run) | `admin@example.com` |
+| `ADMIN_PASSWORD` | **Yes**† | Initial admin password (change from dashboard) | `changeme` |
+
+† `ADMIN_EMAIL` / `ADMIN_PASSWORD` are only used to seed the first admin. Change the password from the dashboard after logging in — future restarts do NOT overwrite the stored password.
 
 ### Where the URL goes in the code
 
@@ -77,6 +90,12 @@ After changing `APP_URL`, restart the server:
 
 ```bash
 npm run dev
+```
+
+Generate a strong `JWT_SECRET`:
+
+```bash
+node -e "console.log(require('crypto').randomBytes(48).toString('hex'))"
 ```
 
 ---
@@ -116,6 +135,103 @@ npm run dev:frontend   # Next.js dashboard only (port 3001)
 ```
 
 Keep this terminal running. You need **two terminals** for local development (app + ngrok).
+
+---
+
+## Admin authentication
+
+The dashboard is protected by an email + password login. All `/api/leads/*` endpoints require a valid session; Twilio webhooks (`/webhooks/*`) remain public so Twilio can reach them.
+
+### First-time sign-in
+
+1. Set `ADMIN_EMAIL`, `ADMIN_PASSWORD`, and `JWT_SECRET` in `.env`
+2. Start the app — the console shows `[db] Seeded default admin: <email>`
+3. Open [http://localhost:3001](http://localhost:3001) — you'll be redirected to `/login`
+4. Sign in with those credentials
+5. Open the user menu (top right) → **Change password** — set a strong password and remove `ADMIN_PASSWORD` from `.env`
+
+### Change password
+
+Open the user menu in the dashboard header → **Change password**. Requires the current password, and the new password must be at least 8 characters.
+
+### Sessions
+
+- JWT stored in an **httpOnly cookie** (`mcc_session`) — not accessible to JavaScript
+- Admins are logged out after 15 minutes of inactivity by default (`SESSION_INACTIVITY_MINUTES`)
+- The inactivity window is sliding: authenticated API activity renews the cookie and token activity timestamp
+- `JWT_EXPIRY` is the absolute token lifetime, not the idle timeout
+- `secure` flag is set automatically in production (`NODE_ENV=production`)
+
+### Multi-tenant design (per-business logins later)
+
+The `admins` table has a nullable `account_id`:
+
+- `NULL` → global admin (sees all tenants; currently defaults to `DEFAULT_ACCOUNT_ID`)
+- `<account_id>` → per-tenant admin (future work: each shop only sees its own data)
+
+`req.accountId` is derived from the authenticated admin — clients cannot bypass tenant scoping via query params.
+
+### Endpoints
+
+| Method | Path | Auth | Purpose |
+|---|---|---|---|
+| POST | `/api/auth/login` | Public | Sets `mcc_session` cookie |
+| POST | `/api/auth/logout` | Public | Clears session cookie |
+| GET  | `/api/auth/me` | Required | Returns current admin |
+| POST | `/api/auth/change-password` | Required | Updates own password |
+
+---
+
+## AWS S3 photo storage
+
+Inbound MMS photos are stored in a **private** S3 bucket. The dashboard never exposes S3 object URLs. Instead, image URLs point to the authenticated API (`/api/leads/:id/photos/:photoId`), which checks the admin session + tenant scope and streams the object from S3.
+
+### IAM policy
+
+The IAM user needs `s3:PutObject`, `s3:GetObject`, and `s3:DeleteObject` on the bucket:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": ["s3:PutObject", "s3:GetObject", "s3:DeleteObject"],
+      "Resource": "arn:aws:s3:::YOUR_BUCKET/*"
+    }
+  ]
+}
+```
+
+Keep the bucket private — do NOT enable public access. Viewing is handled through the authenticated API proxy.
+
+### Required bucket privacy settings
+
+In AWS S3 → `preferredpdr-photos` → **Permissions**:
+
+1. **Block public access**: turn ON all four settings
+2. **Bucket policy**: remove any statement that allows `Principal: "*"` with `s3:GetObject`
+3. **Object Ownership**: prefer **Bucket owner enforced** so ACLs are disabled
+4. Existing objects: make sure none have public-read ACLs
+
+After this, a direct S3 object URL should return `403 AccessDenied`. Photos should only load through `/api/leads/:id/photos/:photoId` after admin login.
+
+### Storage layout
+
+```
+s3://<bucket>/
+  accounts/
+    <account_id>/
+      leads/
+        <lead_id>/
+          <timestamp>-<rand>.<ext>
+```
+
+Storage backend is tracked per photo (`lead_photos.storage`) so future migrations (e.g. to another provider) can coexist with existing rows.
+
+### Why not direct S3 or presigned URLs?
+
+Direct S3 object URLs require public access, which is not acceptable for customer photos. Presigned URLs avoid public bucket access, but they are still bearer URLs — anyone who gets the URL can view the object until it expires. The current dashboard uses authenticated API URLs instead, so a copied image URL only works for someone with a valid admin session.
 
 ---
 
@@ -339,7 +455,7 @@ When **time + location + name + need** are all captured, the lead moves to **`pe
 | `appointment_type` | `inspection` or `repair` — set by owner on confirm |
 | `confirmed_time` | Final scheduled time (may differ from preferred_time if owner adjusts) |
 
-Photos are stored in `lead_photos` (DB) and on disk under `PHOTOS_PATH` (default `./data/photos/{account_id}/{lead_id}/`).
+Photos are stored in **AWS S3** (`accounts/{account_id}/leads/{lead_id}/…`), tracked in the `lead_photos` table, and viewed through an authenticated API proxy. See [AWS S3 photo storage](#aws-s3-photo-storage).
 
 ### Lead status flow
 
@@ -526,7 +642,6 @@ config/
   prompts.json            → seed AI prompts
 data/
   leads.db                → SQLite database (created on first run)
-  photos/                 → MMS images by account/lead (created on first run)
 scripts/
   setup-twilio-webhooks.js
   verify-caller.js
@@ -539,8 +654,9 @@ Every tenant-scoped table has an `account_id` foreign key (indexed):
 
 - `leads` — one lead per phone number per account (includes scheduling fields)
 - `messages` — SMS log
-- `lead_photos` — MMS images tied to leads
+- `lead_photos` — MMS images tied to leads (S3 storage keys)
 - `prompt_configs` — editable AI prompts (`account_id` + `prompt_type`)
+- `admins` — dashboard login accounts (nullable `account_id` → global or per-tenant)
 
 All data access goes through `forAccount(accountId)` — no query runs without an explicit tenant scope. The demo uses one account (`demo-account-1`); adding tenants requires no schema changes.
 
@@ -554,16 +670,20 @@ See [Wave 2 — Scheduling, photos, and confirmation](#wave-2--scheduling-photos
 
 ### API routes
 
-| Method | Path | Purpose |
-|---|---|---|
-| GET | `/health` | Health check |
-| GET | `/api/leads` | Lead list + stats (JSON) |
-| GET | `/api/leads/:id` | Lead detail, messages, photos (JSON) |
-| POST | `/api/leads/:id/confirm` | Owner confirms — sends confirmation SMS |
-| GET | `/api/leads/:id/photos/:photoId` | Serve MMS photo (tenant-scoped) |
-| POST | `/webhooks/voice/incoming` | Incoming call → reject + greeting SMS |
-| POST | `/webhooks/voice/status` | Call status callback (backup) |
-| POST | `/webhooks/sms/inbound` | Inbound SMS/MMS → AI capture + photo storage |
+| Method | Path | Auth | Purpose |
+|---|---|---|---|
+| GET | `/health` | Public | Health check |
+| POST | `/api/auth/login` | Public | Set session cookie |
+| POST | `/api/auth/logout` | Public | Clear session cookie |
+| GET  | `/api/auth/me` | Required | Current admin |
+| POST | `/api/auth/change-password` | Required | Change password |
+| GET | `/api/leads` | Required | Lead list + stats (JSON) |
+| GET | `/api/leads/:id` | Required | Lead detail with authenticated photo URLs |
+| GET | `/api/leads/:id/photos/:photoId` | Required | Streams private S3 photo after auth + tenant checks |
+| POST | `/api/leads/:id/confirm` | Required | Owner confirms — sends confirmation SMS |
+| POST | `/webhooks/voice/incoming` | Public | Incoming call → reject + greeting SMS |
+| POST | `/webhooks/voice/status` | Public | Call status callback (backup) |
+| POST | `/webhooks/sms/inbound` | Public | Inbound SMS/MMS → AI capture + S3 upload |
 
 The Next.js dashboard at `http://localhost:3001` consumes the `/api/*` endpoints.
 
@@ -580,3 +700,14 @@ When deploying to a hosted server:
 5. Replace SQLite with Postgres if needed for scale
 
 No ngrok required in production.
+
+## Railway deployment
+
+Use `RAILWAY_DEPLOYMENT.md` for the full step-by-step Railway setup, including:
+
+- Two Railway services (`preferredpdr-api` and `preferredpdr-web`)
+- GitHub automatic deploys from `main`
+- Railway variables to copy from `.env`
+- Persistent SQLite volume setup
+- Frontend `/api/*` proxy so auth cookies and protected image URLs stay on the dashboard domain
+- Twilio webhook URLs for production

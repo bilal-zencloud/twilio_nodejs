@@ -94,22 +94,27 @@ const WebhookController = {
         leads.update(lead.id, { status: LeadRepository.STATUSES.QUALIFYING });
       }
 
-      // Store inbound MMS photos before AI processing
+      // Store inbound MMS photos (S3) before AI processing
       for (const media of mediaItems) {
-        const saved = await photoService.saveLeadPhoto({
-          accountId: account.id,
-          leadId: lead.id,
-          mediaUrl: media.url,
-          mimeType: media.contentType,
-        });
+        try {
+          const saved = await photoService.saveLeadPhoto({
+            accountId: account.id,
+            leadId: lead.id,
+            mediaUrl: media.url,
+            mimeType: media.contentType,
+          });
 
-        photos.create({
-          leadId: lead.id,
-          filePath: saved.relativePath,
-          mimeType: saved.mimeType,
-        });
+          photos.create({
+            leadId: lead.id,
+            filePath: saved.storageKey,
+            mimeType: saved.mimeType,
+            storage: saved.storage,
+          });
 
-        console.log(`[sms/inbound] Photo saved for lead #${lead.id}: ${saved.relativePath}`);
+          console.log(`[sms/inbound] Photo saved to S3 for lead #${lead.id}: ${saved.storageKey}`);
+        } catch (photoErr) {
+          console.error('[sms/inbound] Photo save failed:', photoErr.message);
+        }
       }
 
       const inboundLogBody =
