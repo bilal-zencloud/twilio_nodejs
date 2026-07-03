@@ -75,6 +75,87 @@ class LeadRepository extends TenantScope {
       .all(this.accountId);
   }
 
+  buildListWhere({ status, search } = {}) {
+    const where = ['account_id = @accountId'];
+    const params = { accountId: this.accountId };
+
+    if (status && status !== 'all') {
+      where.push('status = @status');
+      params.status =
+        status === 'action' ? STATUSES.PENDING_CONFIRMATION : status;
+    }
+
+    if (search) {
+      where.push(`(
+        lower(coalesce(name, '')) LIKE @search OR
+        lower(caller_phone) LIKE @search OR
+        lower(coalesce(need_summary, '')) LIKE @search OR
+        lower(coalesce(location, '')) LIKE @search
+      )`);
+      params.search = `%${search.toLowerCase()}%`;
+    }
+
+    return { where: where.join(' AND '), params };
+  }
+
+  findPage({ page = 1, limit = 30, status = 'all', search = '' } = {}) {
+    const safeLimit = Math.min(Math.max(parseInt(limit, 10) || 30, 1), 30);
+    const safePage = Math.max(parseInt(page, 10) || 1, 1);
+    const offset = (safePage - 1) * safeLimit;
+    const { where, params } = this.buildListWhere({
+      status,
+      search: search.trim(),
+    });
+
+    return db
+      .prepare(
+        `SELECT * FROM leads
+         WHERE ${where}
+         ORDER BY
+           CASE status
+             WHEN 'pending_confirmation' THEN 0
+             ELSE 1
+           END,
+           created_at DESC
+         LIMIT @limit OFFSET @offset`
+      )
+      .all({ ...params, limit: safeLimit, offset });
+  }
+
+  count({ status = 'all', search = '' } = {}) {
+    const { where, params } = this.buildListWhere({
+      status,
+      search: search.trim(),
+    });
+
+    return db
+      .prepare(`SELECT COUNT(*) AS count FROM leads WHERE ${where}`)
+      .get(params).count;
+  }
+
+  stats() {
+    const rows = db
+      .prepare(
+        `SELECT status, COUNT(*) AS count
+         FROM leads
+         WHERE account_id = ?
+         GROUP BY status`
+      )
+      .all(this.accountId);
+
+    const counts = Object.fromEntries(rows.map((r) => [r.status, r.count]));
+    return {
+      total: rows.reduce((sum, r) => sum + r.count, 0),
+      pending: counts[STATUSES.PENDING_CONFIRMATION] || 0,
+      confirmed: counts[STATUSES.CONFIRMED] || 0,
+      active:
+        (counts[STATUSES.NEW] || 0) +
+        (counts[STATUSES.CONTACTED] || 0) +
+        (counts[STATUSES.QUALIFYING] || 0) +
+        (counts[STATUSES.CAPTURED] || 0),
+    };
+  }
+
   update(id, fields) {
     const allowed = [
       'status',

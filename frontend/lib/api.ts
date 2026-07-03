@@ -63,8 +63,20 @@ async function clientFetch<T>(path: string, init?: RequestInit): Promise<T> {
   return res.json();
 }
 
-export async function fetchLeadsServer(cookie: string) {
-  return serverFetch<LeadsResponse>('/api/leads', cookie);
+export interface FetchLeadsParams {
+  page?: string | number;
+  status?: string;
+  search?: string;
+}
+
+export async function fetchLeadsServer(cookie: string, params: FetchLeadsParams = {}) {
+  const query = new URLSearchParams();
+  query.set('limit', '30');
+  if (params.page) query.set('page', String(params.page));
+  if (params.status && params.status !== 'all') query.set('status', params.status);
+  if (params.search) query.set('search', params.search);
+
+  return serverFetch<LeadsResponse>(`/api/leads?${query.toString()}`, cookie);
 }
 
 export async function fetchLeadServer(id: string | number, cookie: string) {

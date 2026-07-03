@@ -16,21 +16,33 @@ const ApiController = {
   listLeads(req, res) {
     const accountId = req.accountId;
     const { leads } = forAccount(accountId);
-    const allLeads = leads.findAll();
+    const page = Math.max(parseInt(req.query.page || '1', 10) || 1, 1);
+    const limit = Math.min(Math.max(parseInt(req.query.limit || '30', 10) || 30, 1), 30);
+    const status = req.query.status || 'all';
+    const search = (req.query.search || '').trim();
+    const total = leads.count({ status, search });
+    const totalPages = Math.max(Math.ceil(total / limit), 1);
+    const safePage = Math.min(page, totalPages);
+    const pagedLeads = leads.findPage({
+      page: safePage,
+      limit,
+      status,
+      search,
+    });
 
     res.json({
       accountId,
-      leads: allLeads,
-      stats: {
-        total: allLeads.length,
-        pending: allLeads.filter(
-          (l) => l.status === LeadRepository.STATUSES.PENDING_CONFIRMATION
-        ).length,
-        confirmed: allLeads.filter((l) => l.status === LeadRepository.STATUSES.CONFIRMED)
-          .length,
-        active: allLeads.filter((l) =>
-          ['new', 'contacted', 'qualifying', 'captured'].includes(l.status)
-        ).length,
+      leads: pagedLeads,
+      stats: leads.stats(),
+      pagination: {
+        page: safePage,
+        limit,
+        total,
+        totalPages,
+        hasNextPage: safePage < totalPages,
+        hasPreviousPage: safePage > 1,
+        status,
+        search,
       },
     });
   },

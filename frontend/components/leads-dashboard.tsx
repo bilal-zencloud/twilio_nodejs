@@ -1,12 +1,22 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import Link from 'next/link';
-import { Search, Filter, Users, Clock, CheckCircle2, Activity } from 'lucide-react';
+import { usePathname, useRouter, useSearchParams } from 'next/navigation';
+import {
+  Search,
+  Filter,
+  Users,
+  Clock,
+  CheckCircle2,
+  Activity,
+  ChevronLeft,
+  ChevronRight,
+} from 'lucide-react';
 import { StatusBadge } from '@/components/status-badge';
 import { StatCard } from '@/components/stat-card';
 import { cn, formatDate, formatPhone, truncate } from '@/lib/utils';
-import type { Lead, LeadStats, LeadStatus } from '@/lib/types';
+import type { Lead, LeadPagination, LeadStats, LeadStatus } from '@/lib/types';
 
 const FILTERS: { id: 'all' | LeadStatus | 'action'; label: string }[] = [
   { id: 'all', label: 'All leads' },
@@ -21,31 +31,69 @@ const FILTERS: { id: 'all' | LeadStatus | 'action'; label: string }[] = [
 interface LeadsDashboardProps {
   initialLeads: Lead[];
   stats: LeadStats;
+  pagination: LeadPagination;
   accountId: string;
 }
 
-export function LeadsDashboard({ initialLeads, stats, accountId }: LeadsDashboardProps) {
-  const [search, setSearch] = useState('');
-  const [filter, setFilter] = useState<(typeof FILTERS)[number]['id']>('all');
+export function LeadsDashboard({
+  initialLeads,
+  stats,
+  pagination,
+  accountId,
+}: LeadsDashboardProps) {
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const [search, setSearch] = useState(pagination.search || '');
+  const [filter, setFilter] = useState<(typeof FILTERS)[number]['id']>(
+    (pagination.status as (typeof FILTERS)[number]['id']) || 'all'
+  );
 
-  const filtered = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    return initialLeads.filter((lead) => {
-      const matchesSearch =
-        !q ||
-        lead.name?.toLowerCase().includes(q) ||
-        lead.caller_phone.includes(q) ||
-        lead.need_summary?.toLowerCase().includes(q) ||
-        lead.location?.toLowerCase().includes(q);
+  const start = pagination.total === 0 ? 0 : (pagination.page - 1) * pagination.limit + 1;
+  const end = Math.min(pagination.page * pagination.limit, pagination.total);
 
-      const matchesFilter =
-        filter === 'all' ||
-        (filter === 'action' && lead.status === 'pending_confirmation') ||
-        lead.status === filter;
+  function buildHref(next: {
+    page?: number;
+    status?: string;
+    search?: string;
+  }) {
+    const params = new URLSearchParams(searchParams.toString());
+    const page = next.page ?? pagination.page;
+    const status = next.status ?? filter;
+    const query = next.search ?? search;
 
-      return matchesSearch && matchesFilter;
-    });
-  }, [initialLeads, search, filter]);
+    if (page > 1) params.set('page', String(page));
+    else params.delete('page');
+
+    if (status && status !== 'all') params.set('status', status);
+    else params.delete('status');
+
+    if (query.trim()) params.set('search', query.trim());
+    else params.delete('search');
+
+    const qs = params.toString();
+    return qs ? `${pathname}?${qs}` : pathname;
+  }
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      router.replace(buildHref({ page: 1, search }));
+    }, 350);
+
+    return () => window.clearTimeout(timer);
+    // Search is intentionally debounced; filters/pagination update immediately.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [search]);
+
+  useEffect(() => {
+    setSearch(pagination.search || '');
+    setFilter((pagination.status as (typeof FILTERS)[number]['id']) || 'all');
+  }, [pagination.search, pagination.status]);
+
+  function handleFilter(nextFilter: (typeof FILTERS)[number]['id']) {
+    setFilter(nextFilter);
+    router.push(buildHref({ page: 1, status: nextFilter }));
+  }
 
   return (
     <div className="space-y-8">
@@ -87,7 +135,7 @@ export function LeadsDashboard({ initialLeads, stats, accountId }: LeadsDashboar
           </div>
           <div className="flex items-center gap-2 text-xs text-slate-500">
             <Filter className="h-3.5 w-3.5" />
-            {filtered.length} of {initialLeads.length} shown
+            Showing {start}-{end} of {pagination.total}
           </div>
         </div>
 
@@ -96,7 +144,7 @@ export function LeadsDashboard({ initialLeads, stats, accountId }: LeadsDashboar
             <button
               key={f.id}
               type="button"
-              onClick={() => setFilter(f.id)}
+              onClick={() => handleFilter(f.id)}
               className={cn(
                 'rounded-full px-3.5 py-1.5 text-xs font-medium transition',
                 filter === f.id
@@ -109,7 +157,7 @@ export function LeadsDashboard({ initialLeads, stats, accountId }: LeadsDashboar
           ))}
         </div>
 
-        {filtered.length === 0 ? (
+        {initialLeads.length === 0 ? (
           <div className="px-6 py-16 text-center">
             <p className="text-sm font-medium text-slate-700">No leads match your filters</p>
             <p className="mt-1 text-sm text-slate-500">Try adjusting search or filter criteria.</p>
@@ -128,7 +176,7 @@ export function LeadsDashboard({ initialLeads, stats, accountId }: LeadsDashboar
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {filtered.map((lead) => (
+                {initialLeads.map((lead) => (
                   <tr
                     key={lead.id}
                     className={cn(
@@ -167,6 +215,42 @@ export function LeadsDashboard({ initialLeads, stats, accountId }: LeadsDashboar
                 ))}
               </tbody>
             </table>
+          </div>
+        )}
+
+        {pagination.total > 0 && (
+          <div className="flex flex-col gap-3 border-t border-slate-100 px-4 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-5">
+            <p className="text-sm text-slate-500">
+              Page {pagination.page} of {pagination.totalPages} · 30 leads max per page
+            </p>
+            <div className="flex items-center gap-2">
+              <Link
+                href={buildHref({ page: pagination.page - 1 })}
+                aria-disabled={!pagination.hasPreviousPage}
+                className={cn(
+                  'inline-flex items-center gap-1.5 rounded-xl border px-3 py-2 text-sm font-medium transition',
+                  pagination.hasPreviousPage
+                    ? 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'
+                    : 'pointer-events-none border-slate-100 bg-slate-50 text-slate-300'
+                )}
+              >
+                <ChevronLeft className="h-4 w-4" />
+                Previous
+              </Link>
+              <Link
+                href={buildHref({ page: pagination.page + 1 })}
+                aria-disabled={!pagination.hasNextPage}
+                className={cn(
+                  'inline-flex items-center gap-1.5 rounded-xl border px-3 py-2 text-sm font-medium transition',
+                  pagination.hasNextPage
+                    ? 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'
+                    : 'pointer-events-none border-slate-100 bg-slate-50 text-slate-300'
+                )}
+              >
+                Next
+                <ChevronRight className="h-4 w-4" />
+              </Link>
+            </div>
           </div>
         )}
       </div>

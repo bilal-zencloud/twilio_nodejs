@@ -54,6 +54,18 @@ export interface LeadsResponse {
   accountId: string;
   leads: Lead[];
   stats: LeadStats;
+  pagination: LeadPagination;
+}
+
+export interface LeadPagination {
+  page: number;
+  limit: number;
+  total: number;
+  totalPages: number;
+  hasNextPage: boolean;
+  hasPreviousPage: boolean;
+  status: string;
+  search: string;
 }
 
 export interface LeadDetailResponse {

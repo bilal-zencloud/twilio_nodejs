@@ -3,7 +3,16 @@ import { LeadsDashboard } from '@/components/leads-dashboard';
 import { fetchLeadsServer } from '@/lib/api';
 import { getCookieHeader, getCurrentAdmin } from '@/lib/server-auth';
 
-export default async function HomePage() {
+interface HomePageProps {
+  searchParams: Promise<{
+    page?: string;
+    status?: string;
+    search?: string;
+  }>;
+}
+
+export default async function HomePage({ searchParams }: HomePageProps) {
+  const params = await searchParams;
   const cookie = await getCookieHeader();
   const admin = await getCurrentAdmin();
 
@@ -11,7 +20,11 @@ export default async function HomePage() {
   let error: string | null = null;
 
   try {
-    data = await fetchLeadsServer(cookie);
+    data = await fetchLeadsServer(cookie, {
+      page: params.page,
+      status: params.status,
+      search: params.search,
+    });
   } catch (err) {
     error = err instanceof Error ? err.message : 'Failed to load leads';
   }
@@ -33,6 +46,7 @@ export default async function HomePage() {
           <LeadsDashboard
             initialLeads={data.leads}
             stats={data.stats}
+            pagination={data.pagination}
             accountId={data.accountId}
           />
         ) : null}
