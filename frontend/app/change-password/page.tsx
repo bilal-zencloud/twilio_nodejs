@@ -24,9 +24,16 @@ export default function ChangePasswordPage() {
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
 
+  function updateField(setter: (value: string) => void, value: string) {
+    setter(value);
+    setError(null);
+    setSuccess(false);
+  }
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
+    setSuccess(false);
 
     if (next !== confirm) {
       setError(ERROR_MESSAGES.passwords_do_not_match);
@@ -101,7 +108,7 @@ export default function ChangePasswordPage() {
                 required
                 autoComplete="current-password"
                 value={current}
-                onChange={setCurrent}
+                onChange={(value) => updateField(setCurrent, value)}
               />
             </label>
 
@@ -112,7 +119,7 @@ export default function ChangePasswordPage() {
                 minLength={8}
                 autoComplete="new-password"
                 value={next}
-                onChange={setNext}
+                onChange={(value) => updateField(setNext, value)}
               />
               <span className="mt-1 block text-xs text-slate-500">At least 8 characters.</span>
             </label>
@@ -124,7 +131,7 @@ export default function ChangePasswordPage() {
                 minLength={8}
                 autoComplete="new-password"
                 value={confirm}
-                onChange={setConfirm}
+                onChange={(value) => updateField(setConfirm, value)}
               />
             </label>
 
