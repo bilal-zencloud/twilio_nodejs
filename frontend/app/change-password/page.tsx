@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { ArrowLeft, KeyRound, Loader2, AlertCircle, CheckCircle2 } from 'lucide-react';
 import { AppHeader } from '@/components/app-header';
+import { PasswordInput } from '@/components/password-input';
 import { changePassword } from '@/lib/api';
 
 const ERROR_MESSAGES: Record<string, string> = {
@@ -96,40 +97,34 @@ export default function ChangePasswordPage() {
           <form onSubmit={handleSubmit} className="mt-6 space-y-4">
             <label className="block">
               <span className="text-sm font-medium text-slate-700">Current password</span>
-              <input
-                type="password"
+              <PasswordInput
                 required
                 autoComplete="current-password"
                 value={current}
-                onChange={(e) => setCurrent(e.target.value)}
-                className="mt-1.5 w-full rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm outline-none focus:border-slate-400 focus:ring-2 focus:ring-slate-200"
+                onChange={setCurrent}
               />
             </label>
 
             <label className="block">
               <span className="text-sm font-medium text-slate-700">New password</span>
-              <input
-                type="password"
+              <PasswordInput
                 required
                 minLength={8}
                 autoComplete="new-password"
                 value={next}
-                onChange={(e) => setNext(e.target.value)}
-                className="mt-1.5 w-full rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm outline-none focus:border-slate-400 focus:ring-2 focus:ring-slate-200"
+                onChange={setNext}
               />
               <span className="mt-1 block text-xs text-slate-500">At least 8 characters.</span>
             </label>
 
             <label className="block">
               <span className="text-sm font-medium text-slate-700">Confirm new password</span>
-              <input
-                type="password"
+              <PasswordInput
                 required
                 minLength={8}
                 autoComplete="new-password"
                 value={confirm}
-                onChange={(e) => setConfirm(e.target.value)}
-                className="mt-1.5 w-full rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm outline-none focus:border-slate-400 focus:ring-2 focus:ring-slate-200"
+                onChange={setConfirm}
               />
             </label>
 

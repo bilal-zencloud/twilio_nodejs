@@ -4,6 +4,7 @@ import { Suspense, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { PhoneMissed, Loader2, AlertCircle } from 'lucide-react';
 import { login } from '@/lib/api';
+import { PasswordInput } from '@/components/password-input';
 
 const ERROR_MESSAGES: Record<string, string> = {
   invalid_credentials: 'Invalid email or password.',
@@ -91,13 +92,11 @@ function LoginForm() {
 
           <label className="block">
             <span className="text-sm font-medium text-slate-700">Password</span>
-            <input
-              type="password"
+            <PasswordInput
               required
               autoComplete="current-password"
               value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              className="mt-1.5 w-full rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm outline-none transition focus:border-slate-400 focus:ring-2 focus:ring-slate-200"
+              onChange={setPassword}
             />
           </label>
 
