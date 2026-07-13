@@ -12,6 +12,9 @@ const consentCopy = require('../../config/consent');
 const GREETING_COOLDOWN_MINUTES = 5;
 const processing = new Set();
 
+/** CallSids that entered the voicemail path and still need an opt-in SMS. */
+const pendingOptInByCallSid = new Set();
+
 const { STATUSES } = LeadRepository;
 
 /** Leads already past consent — do not reset or re-send the opt-in SMS. */
@@ -26,7 +29,24 @@ function lockKey(accountId, phone) {
   return `${accountId}:${phone}`;
 }
 
-async function processMissedCall({ from, to, callSid }) {
+function markPendingOptIn(callSid) {
+  if (callSid) pendingOptInByCallSid.add(callSid);
+}
+
+function hasPendingOptIn(callSid) {
+  return Boolean(callSid && pendingOptInByCallSid.has(callSid));
+}
+
+function clearPendingOptIn(callSid) {
+  if (callSid) pendingOptInByCallSid.delete(callSid);
+}
+
+/**
+ * @param {{ from: string, to: string, callSid?: string, sendSms?: boolean }} opts
+ *   sendSms — when false, only create/update the lead (voicemail starting).
+ *             when true (default), send the opt-in SMS if needed.
+ */
+async function processMissedCall({ from, to, callSid, sendSms = true }) {
   const account = resolveAccount(to);
   if (!account) {
     console.error('[missed-call] No account resolved for To:', to);
@@ -44,18 +64,11 @@ async function processMissedCall({ from, to, callSid }) {
   processing.add(key);
 
   try {
-    if (callSid) {
-      const existing = leads.findByCallSid(callSid);
-      if (existing) {
-        console.log(`[missed-call] Already processed CallSid ${callSid} → lead #${existing.id}`);
-        return existing;
-      }
-    }
-
     let lead = leads.findByPhone(from);
 
     if (lead && IN_PIPELINE.has(lead.status)) {
       leads.update(lead.id, { call_sid: callSid || lead.call_sid });
+      clearPendingOptIn(callSid);
       console.log(
         `[missed-call] Lead #${lead.id} already ${lead.status} — skipping opt-in SMS`
       );
@@ -74,7 +87,13 @@ async function processMissedCall({ from, to, callSid }) {
       console.log(`[missed-call] Lead #${lead.id} created for ${from}`);
     }
 
+    if (!sendSms) {
+      markPendingOptIn(callSid);
+      return leads.findById(lead.id);
+    }
+
     if (messages.hasRecentOutbound(lead.id, GREETING_COOLDOWN_MINUTES)) {
+      clearPendingOptIn(callSid);
       console.log(
         `[missed-call] Opt-in already sent to ${from} within ${GREETING_COOLDOWN_MINUTES}m, skipping SMS`
       );
@@ -83,7 +102,8 @@ async function processMissedCall({ from, to, callSid }) {
     }
 
     try {
-      await smsService.sendSmsAndConfirm(from, consentCopy.OPT_IN_SMS);
+      // Don't block the voice webhook on delivery polling — create the message and move on.
+      await smsService.sendSmsAndConfirm(from, consentCopy.OPT_IN_SMS, { waitMs: 0 });
 
       messages.create({
         leadId: lead.id,
@@ -92,10 +112,12 @@ async function processMissedCall({ from, to, callSid }) {
       });
 
       leads.update(lead.id, { status: STATUSES.AWAITING_CONSENT });
+      clearPendingOptIn(callSid);
       console.log(`[missed-call] Opt-in SMS sent to ${from}`);
     } catch (err) {
       leads.update(lead.id, { status: STATUSES.CONTACTED });
       console.error('[missed-call] SMS error (lead saved):', err.message);
+      // Keep pending so call-status completed can retry once.
     }
 
     return leads.findById(lead.id);
@@ -104,4 +126,9 @@ async function processMissedCall({ from, to, callSid }) {
   }
 }
 
-module.exports = { processMissedCall };
+module.exports = {
+  processMissedCall,
+  markPendingOptIn,
+  hasPendingOptIn,
+  clearPendingOptIn,
+};

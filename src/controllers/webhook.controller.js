@@ -10,7 +10,7 @@ const { forAccount } = require('../repositories');
 const LeadRepository = require('../repositories/LeadRepository');
 const MessageRepository = require('../repositories/MessageRepository');
 const { resolveAccount } = require('../services/account.service');
-const { processMissedCall } = require('../services/missedCall.service');
+const { processMissedCall, hasPendingOptIn } = require('../services/missedCall.service');
 const consentService = require('../services/consent.service');
 const aiService = require('../services/ai.service');
 const smsService = require('../services/sms.service');
@@ -99,18 +99,20 @@ const WebhookController = {
     }
 
     // No owner dial configured — assume call already forwarded after no-answer.
+    // Create the lead now; send opt-in SMS after voicemail ends (more reliable than
+    // fire-and-forget after this response, which Railway can cut off).
     appendVoicemailTwiML(response);
     res.type('text/xml');
     res.send(response.toString());
 
-    processMissedCall({ from: From, to: To, callSid: CallSid }).catch((err) => {
+    processMissedCall({ from: From, to: To, callSid: CallSid, sendSms: false }).catch((err) => {
       console.error('[voice/incoming] Error:', err.message);
     });
   },
 
   /**
-   * Dial finished. If the owner answered, end quietly. If not, play disclosure + voicemail
-   * and send the one-time opt-in SMS.
+   * Dial finished. If the owner answered, end quietly. If not, play disclosure + voicemail.
+   * Opt-in SMS is sent from voicemail-complete (or call completed backup).
    */
   handleDialResult(req, res) {
     const { DialCallStatus, From, To, CallSid } = req.body;
@@ -129,16 +131,24 @@ const WebhookController = {
     res.type('text/xml');
     res.send(response.toString());
 
-    processMissedCall({ from: From, to: To, callSid: CallSid }).catch((err) => {
+    processMissedCall({ from: From, to: To, callSid: CallSid, sendSms: false }).catch((err) => {
       console.error('[voice/dial-result] Error:', err.message);
     });
   },
 
   /**
-   * After Record completes (including silence timeout) — thank the caller and hang up.
-   * Without this separate action URL, Twilio re-requests /voice/incoming and loops.
+   * After Record completes (including silence timeout) — thank the caller, hang up,
+   * and send the one-time opt-in SMS on this live request (avoids dropped background work).
    */
-  handleVoicemailComplete(req, res) {
+  async handleVoicemailComplete(req, res) {
+    const { From, To, CallSid } = req.body;
+
+    try {
+      await processMissedCall({ from: From, to: To, callSid: CallSid, sendSms: true });
+    } catch (err) {
+      console.error('[voice/voicemail-complete] Error:', err.message);
+    }
+
     const response = new VoiceResponse();
     response.say({ voice: 'Polly.Joanna' }, consentCopy.VOICEMAIL_THANKS);
     response.hangup();
@@ -150,13 +160,23 @@ const WebhookController = {
     const { CallStatus, From, CallSid, To } = req.body;
     res.sendStatus(200);
 
-    // Backup path when carrier forwarding reports a missed status without Dial.
-    // Skipped when OWNER_PHONE_NUMBER is set — dial-result owns the missed path.
+    // Backup: caller hung up during the greeting before Record's action fired.
+    // Only send if this CallSid entered the voicemail path (never when owner answered).
+    if (CallStatus === 'completed' && hasPendingOptIn(CallSid)) {
+      try {
+        await processMissedCall({ from: From, to: To, callSid: CallSid, sendSms: true });
+      } catch (err) {
+        console.error('[voice/status] Opt-in backup error:', err.message);
+      }
+      return;
+    }
+
+    // Legacy backup when carrier forwarding reports a missed status without Dial.
     if (config.twilio.ownerPhoneNumber) return;
     if (!MISSED_STATUSES.has(CallStatus)) return;
 
     try {
-      await processMissedCall({ from: From, to: To, callSid: CallSid });
+      await processMissedCall({ from: From, to: To, callSid: CallSid, sendSms: true });
     } catch (err) {
       console.error('[voice/status] Error:', err.message);
     }
