@@ -25,10 +25,19 @@ const CLARIFICATION_SMS =
 
 const VOICEMAIL_THANKS = 'Thank you for your message. Goodbye.';
 
+/** Logged when Twilio Advanced Opt-Out sends its auto-reply (we don't send a second SMS). */
+const STOP_ACK_SMS =
+  'You have successfully been unsubscribed. You will not receive any more messages from this number. Reply START to resubscribe.';
+
+const START_ACK_SMS =
+  'You have successfully been re-subscribed to messages from this number. Reply HELP for help. Reply STOP to unsubscribe. Msg&Data rates may apply.';
+
 module.exports = {
   VOICEMAIL_GREETING,
   OPT_IN_SMS,
   HELP_SMS,
   CLARIFICATION_SMS,
   VOICEMAIL_THANKS,
+  STOP_ACK_SMS,
+  START_ACK_SMS,
 };

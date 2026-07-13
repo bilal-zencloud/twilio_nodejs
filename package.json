@@ -15,6 +15,7 @@
     "setup:twilio": "node scripts/setup-twilio-webhooks.js",
     "verify:caller": "node scripts/verify-caller.js",
     "check:sms": "node scripts/check-sms-delivery.js",
+    "clear:leads": "node scripts/clear-leads.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],

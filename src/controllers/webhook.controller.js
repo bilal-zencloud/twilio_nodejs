@@ -250,9 +250,16 @@ const WebhookController = {
 
       const keyword = consentService.classifyConsentReply(messageBody);
 
-      // Carrier STOP — end automated messaging for this lead
+      // Carrier STOP — Twilio Advanced Opt-Out sends the phone SMS; we log it for chat parity
       if (keyword === 'stop') {
-        await consentService.handleStopOptOut({ lead, leads });
+        consentService.handleStopOptOut({ lead, leads, messages });
+        res.type('text/xml');
+        return res.send(twiml.toString());
+      }
+
+      // START re-opens the consent gate (YES still required before AI qualify)
+      if (keyword === 'start') {
+        consentService.handleStartResubscribe({ lead, leads, messages });
         res.type('text/xml');
         return res.send(twiml.toString());
       }
