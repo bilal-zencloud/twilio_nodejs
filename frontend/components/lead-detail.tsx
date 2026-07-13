@@ -115,6 +115,13 @@ export function LeadDetail({
               <InfoRow icon={Wrench} label="Need" value={lead.need_summary || '—'} className="sm:col-span-2" />
               <InfoRow icon={Clock} label="Preferred time" value={lead.preferred_time || '—'} />
               <InfoRow icon={MapPin} label="Location" value={lead.location || '—'} />
+              {lead.sms_opted_in_at && (
+                <InfoRow
+                  icon={CheckCircle2}
+                  label="SMS opted in"
+                  value={formatDate(lead.sms_opted_in_at)}
+                />
+              )}
               {lead.appointment_type && (
                 <InfoRow
                   icon={Search}

@@ -22,9 +22,11 @@ const FILTERS: { id: 'all' | LeadStatus | 'action'; label: string }[] = [
   { id: 'all', label: 'All leads' },
   { id: 'action', label: 'Needs action' },
   { id: 'pending_confirmation', label: 'Pending' },
+  { id: 'awaiting_consent', label: 'Awaiting consent' },
   { id: 'contacted', label: 'Contacted' },
   { id: 'qualifying', label: 'Qualifying' },
   { id: 'confirmed', label: 'Confirmed' },
+  { id: 'opted_out', label: 'Opted out' },
   { id: 'closed', label: 'Closed' },
 ];
 

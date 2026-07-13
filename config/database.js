@@ -97,6 +97,13 @@ function migrateAdminsAndStorage() {
   }
 }
 
+/** A2P SMS consent — retain affirmative opt-in timestamp. */
+function migrateConsentSchema() {
+  if (!columnExists('leads', 'sms_opted_in_at')) {
+    db.exec('ALTER TABLE leads ADD COLUMN sms_opted_in_at TEXT');
+  }
+}
+
 function initializeSchema() {
   migrateSchema();
 
@@ -121,6 +128,7 @@ function initializeSchema() {
       appointment_type TEXT,
       confirmed_time TEXT,
       call_sid TEXT,
+      sms_opted_in_at TEXT,
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       updated_at TEXT NOT NULL DEFAULT (datetime('now')),
       FOREIGN KEY (account_id) REFERENCES accounts(id)
@@ -161,6 +169,7 @@ function initializeSchema() {
 
   migrateWave2Schema();
   migrateAdminsAndStorage();
+  migrateConsentSchema();
 }
 
 function loadSeedJson(filename) {
@@ -219,7 +228,7 @@ function seedWave2Prompts() {
       updated_at = datetime('now')
   `);
 
-  const wave2Types = ['qualify', 'confirmation'];
+  const wave2Types = ['greeting', 'qualify', 'confirmation'];
   const accountIds = db.prepare('SELECT id FROM accounts').all().map((a) => a.id);
 
   for (const accountId of accountIds) {

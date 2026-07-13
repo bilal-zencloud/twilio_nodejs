@@ -1,16 +1,26 @@
 /**
- * Shared missed-call handler — creates or updates a lead and sends the AI greeting SMS.
- * One lead per phone number per account; repeat calls update the existing record.
+ * Shared missed-call handler — creates/updates a lead and sends the one-time
+ * A2P opt-in SMS. Qualifying conversation starts only after the caller replies YES.
  */
 const { forAccount } = require('../repositories');
 const LeadRepository = require('../repositories/LeadRepository');
 const MessageRepository = require('../repositories/MessageRepository');
 const { resolveAccount } = require('./account.service');
-const aiService = require('./ai.service');
 const smsService = require('./sms.service');
+const consentCopy = require('../../config/consent');
 
 const GREETING_COOLDOWN_MINUTES = 5;
 const processing = new Set();
+
+const { STATUSES } = LeadRepository;
+
+/** Leads already past consent — do not reset or re-send the opt-in SMS. */
+const IN_PIPELINE = new Set([
+  STATUSES.QUALIFYING,
+  STATUSES.CAPTURED,
+  STATUSES.PENDING_CONFIRMATION,
+  STATUSES.CONFIRMED,
+]);
 
 function lockKey(accountId, phone) {
   return `${accountId}:${phone}`;
@@ -43,37 +53,49 @@ async function processMissedCall({ from, to, callSid }) {
     }
 
     let lead = leads.findByPhone(from);
+
+    if (lead && IN_PIPELINE.has(lead.status)) {
+      leads.update(lead.id, { call_sid: callSid || lead.call_sid });
+      console.log(
+        `[missed-call] Lead #${lead.id} already ${lead.status} — skipping opt-in SMS`
+      );
+      return lead;
+    }
+
     if (lead) {
-      leads.update(lead.id, { call_sid: callSid || lead.call_sid, status: LeadRepository.STATUSES.NEW });
+      leads.update(lead.id, {
+        call_sid: callSid || lead.call_sid,
+        status: STATUSES.AWAITING_CONSENT,
+      });
       console.log(`[missed-call] Updated existing lead #${lead.id} for ${from}`);
     } else {
       lead = leads.create({ callerPhone: from, callSid: callSid || null });
+      leads.update(lead.id, { status: STATUSES.AWAITING_CONSENT });
       console.log(`[missed-call] Lead #${lead.id} created for ${from}`);
     }
 
     if (messages.hasRecentOutbound(lead.id, GREETING_COOLDOWN_MINUTES)) {
       console.log(
-        `[missed-call] Greeting already sent to ${from} within ${GREETING_COOLDOWN_MINUTES}m, skipping SMS`
+        `[missed-call] Opt-in already sent to ${from} within ${GREETING_COOLDOWN_MINUTES}m, skipping SMS`
       );
-      leads.update(lead.id, { status: LeadRepository.STATUSES.QUALIFYING });
-      return lead;
+      leads.update(lead.id, { status: STATUSES.AWAITING_CONSENT });
+      return leads.findById(lead.id);
     }
 
     try {
-      const greeting = await aiService.generateGreeting(account.id, account.name);
-      await smsService.sendSmsAndConfirm(from, greeting);
+      await smsService.sendSmsAndConfirm(from, consentCopy.OPT_IN_SMS);
 
       messages.create({
         leadId: lead.id,
         direction: MessageRepository.DIRECTIONS.OUTBOUND,
-        body: greeting,
+        body: consentCopy.OPT_IN_SMS,
       });
 
-      leads.update(lead.id, { status: LeadRepository.STATUSES.QUALIFYING });
-      console.log(`[missed-call] Greeting SMS sent to ${from}`);
+      leads.update(lead.id, { status: STATUSES.AWAITING_CONSENT });
+      console.log(`[missed-call] Opt-in SMS sent to ${from}`);
     } catch (err) {
-      leads.update(lead.id, { status: LeadRepository.STATUSES.CONTACTED });
-      console.error('[missed-call] SMS/AI error (lead saved):', err.message);
+      leads.update(lead.id, { status: STATUSES.CONTACTED });
+      console.error('[missed-call] SMS error (lead saved):', err.message);
     }
 
     return leads.findById(lead.id);

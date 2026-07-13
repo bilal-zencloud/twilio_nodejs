@@ -7,10 +7,12 @@ const TenantScope = require('./TenantScope');
 const STATUSES = {
   NEW: 'new',
   CONTACTED: 'contacted',
+  AWAITING_CONSENT: 'awaiting_consent',
   QUALIFYING: 'qualifying',
   CAPTURED: 'captured',
   PENDING_CONFIRMATION: 'pending_confirmation',
   CONFIRMED: 'confirmed',
+  OPTED_OUT: 'opted_out',
   CLOSED: 'closed',
 };
 
@@ -151,8 +153,11 @@ class LeadRepository extends TenantScope {
       active:
         (counts[STATUSES.NEW] || 0) +
         (counts[STATUSES.CONTACTED] || 0) +
+        (counts[STATUSES.AWAITING_CONSENT] || 0) +
         (counts[STATUSES.QUALIFYING] || 0) +
         (counts[STATUSES.CAPTURED] || 0),
+      awaitingConsent: counts[STATUSES.AWAITING_CONSENT] || 0,
+      optedOut: counts[STATUSES.OPTED_OUT] || 0,
     };
   }
 
@@ -167,6 +172,7 @@ class LeadRepository extends TenantScope {
       'appointment_type',
       'confirmed_time',
       'call_sid',
+      'sms_opted_in_at',
     ];
     const sets = [];
     const params = { accountId: this.accountId, id };

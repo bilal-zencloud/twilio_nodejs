@@ -1,6 +1,6 @@
 # Missed Call Capture
 
-When a call goes unanswered, this module texts the caller back with an AI-generated message, runs a short SMS exchange to capture their info, and saves the lead to a dashboard.
+When a call goes unanswered (or is forwarded to the AI Receptionist), Twilio plays a text-to-speech disclosure and voicemail prompt, texts the caller **one** A2P opt-in SMS, and waits for **YES** before any AI qualifying conversation. After consent, the existing SMS estimate / scheduling / photo / dashboard flow continues unchanged.
 
 ---
 
@@ -15,13 +15,14 @@ When a call goes unanswered, this module texts the caller back with an AI-genera
 7. [Twilio webhook configuration](#twilio-webhook-configuration)
 8. [Business name (dynamic, editable)](#business-name-dynamic-editable)
 9. [AI prompts (editable per tenant)](#ai-prompts-editable-per-tenant)
-10. [Wave 2 — Scheduling, photos, and confirmation](#wave-2--scheduling-photos-and-confirmation)
-11. [Viewing the database](#viewing-the-database)
-12. [Testing the full flow](#testing-the-full-flow)
-13. [Useful npm scripts](#useful-npm-scripts)
-14. [Troubleshooting](#troubleshooting)
-15. [Railway deployment](#railway-deployment)
-16. [Architecture overview](#architecture-overview)
+10. [A2P SMS consent (double opt-in)](#a2p-sms-consent-double-opt-in)
+11. [Wave 2 — Scheduling, photos, and confirmation](#wave-2--scheduling-photos-and-confirmation)
+12. [Viewing the database](#viewing-the-database)
+13. [Testing the full flow](#testing-the-full-flow)
+14. [Useful npm scripts](#useful-npm-scripts)
+15. [Troubleshooting](#troubleshooting)
+16. [Railway deployment](#railway-deployment)
+17. [Architecture overview](#architecture-overview)
 
 ---
 
@@ -392,9 +393,11 @@ AI behavior (greeting tone, qualifying questions, field extraction) is stored in
 
 | `prompt_type` | Used when |
 |---|---|
-| `greeting` | First SMS after a missed call |
-| `qualify` | Processing the caller's SMS replies — captures name, need, preferred time, location |
+| `greeting` | First **AI** SMS after the caller replies YES (consent gate already sent) |
+| `qualify` | Processing further SMS replies — captures name, need, preferred time, location |
 | `confirmation` | Owner confirms from dashboard — sends appointment confirmation SMS |
+
+Consent / HELP / clarification SMS copy is **not** AI-generated. It lives in `config/consent.js` so A2P disclosure wording stays fixed and auditable.
 
 The qualify prompt uses **mobile-service wording** (we come to the customer). It returns JSON with `extracted_preferred_time`, `extracted_location`, and `scheduling_complete` when both time and location are captured.
 
@@ -432,7 +435,56 @@ WHERE account_id = 'demo-account-1' AND prompt_type = 'greeting';
 
 ### Default seed
 
-On first run, prompts are seeded from `config/prompts.json`. After that, edit the database — the JSON file is only used for initial seeding. On startup, Wave 2 prompts (`qualify`, `confirmation`) are upserted for all accounts so existing installs pick up scheduling and confirmation templates.
+On first run, prompts are seeded from `config/prompts.json`. After that, edit the database — the JSON file is only used for initial seeding. On startup, `greeting`, `qualify`, and `confirmation` prompts are upserted for all accounts so existing installs pick up consent + scheduling templates.
+
+---
+
+## A2P SMS consent (double opt-in)
+
+Carrier / Twilio A2P campaigns require an explicit opt-in before conversational SMS. This app gates the AI Receptionist as follows:
+
+```
+Missed / forwarded call
+        ↓
+Twilio answers → TTS disclosure + voicemail (Record)
+        ↓
+ONE fixed opt-in SMS
+        ↓
+Lead status: awaiting_consent  (no AI messages)
+        ↓
+Caller replies YES / Y        → sms_opted_in_at set, AI greeting, then qualify flow
+Caller replies STOP           → opted_out (no further automated texts)
+Caller replies HELP           → fixed HELP SMS, stay awaiting_consent
+Anything else                 → one clarification SMS, stay awaiting_consent
+```
+
+### Voice greeting (Twilio Say + Record)
+
+Configured in `src/controllers/webhook.controller.js` using copy from `config/consent.js`. Callers hear the disclosure, then leave a voicemail after the tone.
+
+### Fixed SMS copy
+
+| Trigger | Source |
+|---|---|
+| Opt-in (post-call) | `config/consent.js` → `OPT_IN_SMS` |
+| HELP | `HELP_SMS` |
+| Unrecognized reply while waiting | `CLARIFICATION_SMS` |
+
+### Consent logging
+
+Retained without a separate report UI:
+
+- inbound **YES** in `messages` (conversation history)
+- `leads.sms_opted_in_at` timestamp
+- phone number on the lead
+
+### Lead status flow (with consent)
+
+```
+new → awaiting_consent → qualifying → pending_confirmation → confirmed
+              ↓                 ↑
+           opted_out     (after YES / Y)
+```
 
 ---
 
@@ -460,10 +512,12 @@ Photos are stored in **AWS S3** (`accounts/{account_id}/leads/{lead_id}/…`), t
 ### Lead status flow
 
 ```
-new → contacted → qualifying → pending_confirmation → confirmed
-                                      ↑
-                         (time + location + name + need captured)
+new → awaiting_consent → qualifying → pending_confirmation → confirmed
+              ↓
+           opted_out
 ```
+
+(After YES, the existing Wave 2 path continues: capture time + location + name + need → **pending confirmation**.)
 
 The owner reviews **pending confirmation** leads on the dashboard (highlighted at the top of the list), views photos, chooses **inspection** or **repair**, optionally adjusts the time, and clicks **Confirm & send SMS**. That sends an AI-generated confirmation message (from the `confirmation` prompt) and moves the lead to **`confirmed`**.
 
@@ -516,8 +570,9 @@ SELECT prompt_type FROM prompt_configs;
 | Table | Contents |
 |---|---|
 | `accounts` | Tenant/business info and Twilio number |
-| `leads` | Captured callers and their status |
-| `messages` | Full SMS conversation history |
+| `leads` | Captured callers, status, `sms_opted_in_at` |
+| `messages` | Full SMS conversation history (includes YES opt-in) |
+| `lead_photos` | MMS images (S3 keys) |
 | `prompt_configs` | AI prompts per account |
 
 ---
@@ -535,16 +590,30 @@ You need **three things running**:
 ### End-to-end test
 
 1. Ensure your test phone is in **Verified Caller IDs** (Twilio Console)
-2. Call your Twilio number from that verified phone — **do not answer**
-3. Watch Terminal 1 for:
+2. Call your Twilio number from that verified phone
+3. Listen for the TTS disclosure, then leave a short voicemail after the tone
+4. Watch Terminal 1 for:
    ```
    [webhook] POST /webhooks/voice/incoming
    [missed-call] Lead #1 created for +1...
-   [missed-call] Greeting SMS sent to +1...
+   [missed-call] Opt-in SMS sent to +1...
    ```
-4. Open [http://localhost:3001](http://localhost:3001) — lead should appear
-5. Reply to the SMS from the **same phone** that received it
-6. Dashboard should update with name/need and status `captured`
+5. Open [http://localhost:3001](http://localhost:3001) — lead should show **awaiting consent**
+6. Text **YES** from the same phone — you should get the first AI qualifying question
+7. Continue the SMS exchange (name, need, time, location, photos)
+8. Dashboard should move the lead to `pending_confirmation` when time + location + name + need are captured
+
+### Simulate inbound SMS without a real phone
+
+```bash
+# Opt-in YES (after a lead exists in awaiting_consent)
+curl -X POST "http://localhost:3000/webhooks/sms/inbound" \
+  -d "From=%2B15551234567" \
+  -d "To=%2B19032807223" \
+  -d "Body=YES"
+```
+
+Set `TWILIO_VALIDATE_SIGNATURE=false` locally if you are curling without a Twilio signature.
 
 ### Test SMS delivery to a specific number
 
@@ -552,14 +621,16 @@ You need **three things running**:
 TEST_PHONE=+19032808190 npm run check:sms
 ```
 
-### Simulate an SMS reply (no phone needed)
+### Simulate an unrecognized reply while waiting (clarification)
 
 ```bash
 curl -X POST "http://localhost:3000/webhooks/sms/inbound" \
-  -d "From=%2B12513855121" \
+  -d "From=%2B15551234567" \
   -d "To=%2B19032807223" \
-  -d "Body=Hi+my+name+is+John+and+I+need+plumbing+help"
+  -d "Body=Hi+what+is+this"
 ```
+
+Expect the fixed clarification SMS and status remaining `awaiting_consent` (no AI qualify yet).
 
 ---
 
@@ -629,7 +700,7 @@ src/
   routes/                 → URL routing
   controllers/            → webhook + API handlers
   repositories/           → tenant-scoped data access (account_id enforced)
-  services/               → AI, SMS, missed-call logic
+  services/               → AI, SMS, missed-call, consent gate
   middleware/             → Twilio signature validation, CORS, logging
 frontend/                 → Next.js dashboard (React + Tailwind)
   app/                    → pages (lead list, lead detail)
@@ -663,10 +734,12 @@ All data access goes through `forAccount(accountId)` — no query runs without a
 ### Lead status flow
 
 ```
-new → contacted → qualifying → pending_confirmation → confirmed
+new → awaiting_consent → qualifying → pending_confirmation → confirmed
+              ↓
+           opted_out
 ```
 
-See [Wave 2 — Scheduling, photos, and confirmation](#wave-2--scheduling-photos-and-confirmation) for details.
+See [A2P SMS consent (double opt-in)](#a2p-sms-consent-double-opt-in) and [Wave 2 — Scheduling, photos, and confirmation](#wave-2--scheduling-photos-and-confirmation).
 
 ### API routes
 
@@ -681,9 +754,9 @@ See [Wave 2 — Scheduling, photos, and confirmation](#wave-2--scheduling-photos
 | GET | `/api/leads/:id` | Required | Lead detail with authenticated photo URLs |
 | GET | `/api/leads/:id/photos/:photoId` | Required | Streams private S3 photo after auth + tenant checks |
 | POST | `/api/leads/:id/confirm` | Required | Owner confirms — sends confirmation SMS |
-| POST | `/webhooks/voice/incoming` | Public | Incoming call → reject + greeting SMS |
-| POST | `/webhooks/voice/status` | Public | Call status callback (backup) |
-| POST | `/webhooks/sms/inbound` | Public | Inbound SMS/MMS → AI capture + S3 upload |
+| POST | `/webhooks/voice/incoming` | Public | Answer call → TTS disclosure + voicemail + opt-in SMS |
+| POST | `/webhooks/voice/status` | Public | Call status callback (backup missed-call path) |
+| POST | `/webhooks/sms/inbound` | Public | Consent gate + AI qualify after YES / MMS to S3 |
 
 The Next.js dashboard at `http://localhost:3001` consumes the `/api/*` endpoints.
 

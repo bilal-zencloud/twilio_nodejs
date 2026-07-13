@@ -1,10 +1,12 @@
 export type LeadStatus =
   | 'new'
   | 'contacted'
+  | 'awaiting_consent'
   | 'qualifying'
   | 'captured'
   | 'pending_confirmation'
   | 'confirmed'
+  | 'opted_out'
   | 'closed';
 
 export type AppointmentType = 'inspection' | 'repair';
@@ -21,6 +23,7 @@ export interface Lead {
   location: string | null;
   appointment_type: AppointmentType | null;
   confirmed_time: string | null;
+  sms_opted_in_at: string | null;
   call_sid: string | null;
   created_at: string;
   updated_at: string;

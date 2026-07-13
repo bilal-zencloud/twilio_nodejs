@@ -4,10 +4,12 @@ import type { LeadStatus } from '@/lib/types';
 const STATUS_STYLES: Record<LeadStatus, string> = {
   new: 'bg-sky-50 text-sky-700 ring-sky-200',
   contacted: 'bg-orange-50 text-orange-700 ring-orange-200',
+  awaiting_consent: 'bg-violet-50 text-violet-700 ring-violet-200',
   qualifying: 'bg-rose-50 text-rose-700 ring-rose-200',
   captured: 'bg-emerald-50 text-emerald-700 ring-emerald-200',
   pending_confirmation: 'bg-amber-50 text-amber-800 ring-amber-200',
   confirmed: 'bg-teal-50 text-teal-800 ring-teal-200',
+  opted_out: 'bg-stone-100 text-stone-600 ring-stone-300',
   closed: 'bg-slate-100 text-slate-600 ring-slate-200',
 };
 

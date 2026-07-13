@@ -10,16 +10,18 @@ const LeadRepository = require('../repositories/LeadRepository');
 const MessageRepository = require('../repositories/MessageRepository');
 const { resolveAccount } = require('../services/account.service');
 const { processMissedCall } = require('../services/missedCall.service');
+const consentService = require('../services/consent.service');
 const aiService = require('../services/ai.service');
 const smsService = require('../services/sms.service');
 const photoService = require('../services/photo.service');
+const consentCopy = require('../../config/consent');
 
 const MISSED_STATUSES = new Set(['no-answer', 'busy', 'failed', 'canceled']);
+const { STATUSES } = LeadRepository;
 
 /** Build lead update payload from AI extraction + current lead state. */
 function buildLeadUpdates(lead, result) {
   const updates = {};
-  const { STATUSES } = LeadRepository;
 
   if (result.extracted_name) updates.name = result.extracted_name;
   if (result.extracted_email) updates.email = result.extracted_email;
@@ -37,7 +39,8 @@ function buildLeadUpdates(lead, result) {
   } else if (
     lead.status === STATUSES.NEW ||
     lead.status === STATUSES.CONTACTED ||
-    lead.status === STATUSES.QUALIFYING
+    lead.status === STATUSES.QUALIFYING ||
+    lead.status === STATUSES.AWAITING_CONSENT
   ) {
     updates.status = STATUSES.QUALIFYING;
   }
@@ -46,9 +49,21 @@ function buildLeadUpdates(lead, result) {
 }
 
 const WebhookController = {
+  /**
+   * Answer the forwarded call with TTS disclosure + voicemail, then send the
+   * one-time opt-in SMS (qualifying starts only after YES).
+   */
   handleIncomingCall(req, res) {
     const response = new VoiceResponse();
-    response.reject({ reason: 'busy' });
+    response.say({ voice: 'Polly.Joanna' }, consentCopy.VOICEMAIL_GREETING);
+    response.record({
+      maxLength: 120,
+      playBeep: true,
+      timeout: 5,
+      trim: 'trim-silence',
+    });
+    response.say({ voice: 'Polly.Joanna' }, consentCopy.VOICEMAIL_THANKS);
+
     res.type('text/xml');
     res.send(response.toString());
 
@@ -62,6 +77,8 @@ const WebhookController = {
     const { CallStatus, From, CallSid, To } = req.body;
     res.sendStatus(200);
 
+    // Backup path for carriers that report a missed status instead of connecting.
+    // When we answer with Say/Record, status is typically "completed" and is skipped.
     if (!MISSED_STATUSES.has(CallStatus)) return;
 
     try {
@@ -90,11 +107,12 @@ const WebhookController = {
 
       let lead = leads.findByPhone(From);
       if (!lead) {
+        // Cold inbound SMS: still require YES before any qualifying AI.
         lead = leads.create({ callerPhone: From });
-        leads.update(lead.id, { status: LeadRepository.STATUSES.QUALIFYING });
+        leads.update(lead.id, { status: STATUSES.AWAITING_CONSENT });
       }
 
-      // Store inbound MMS photos (S3) before AI processing
+      // Store inbound MMS photos (S3) before further processing
       for (const media of mediaItems) {
         try {
           const saved = await photoService.saveLeadPhoto({
@@ -127,11 +145,59 @@ const WebhookController = {
         body: inboundLogBody,
       });
 
-      // Skip AI reply for already confirmed/closed leads — still store photos/messages
+      const keyword = consentService.classifyConsentReply(messageBody);
+
+      // Carrier STOP — end automated messaging for this lead
+      if (keyword === 'stop') {
+        await consentService.handleStopOptOut({ lead, leads });
+        res.type('text/xml');
+        return res.send(twiml.toString());
+      }
+
+      // After STOP: YES re-opens consent + qualifies; HELP sends compliance text; else silent
+      if (lead.status === STATUSES.OPTED_OUT) {
+        if (keyword === 'yes') {
+          lead = leads.update(lead.id, { status: STATUSES.AWAITING_CONSENT });
+          await consentService.handleAwaitingConsent({
+            lead,
+            from: From,
+            messageBody,
+            account,
+            leads,
+            messages,
+          });
+        } else if (keyword === 'help') {
+          await smsService.sendSmsAndConfirm(From, consentCopy.HELP_SMS);
+          messages.create({
+            leadId: lead.id,
+            direction: MessageRepository.DIRECTIONS.OUTBOUND,
+            body: consentCopy.HELP_SMS,
+          });
+        }
+        res.type('text/xml');
+        return res.send(twiml.toString());
+      }
+
+      // Consent gate — wait for YES before any AI conversation
       if (
-        lead.status === LeadRepository.STATUSES.CONFIRMED ||
-        lead.status === LeadRepository.STATUSES.CLOSED
+        lead.status === STATUSES.AWAITING_CONSENT ||
+        lead.status === STATUSES.NEW ||
+        lead.status === STATUSES.CONTACTED
       ) {
+        await consentService.handleAwaitingConsent({
+          lead,
+          from: From,
+          messageBody,
+          account,
+          leads,
+          messages,
+        });
+        res.type('text/xml');
+        return res.send(twiml.toString());
+      }
+
+      // Skip AI reply for already confirmed/closed leads — still store photos/messages
+      if (lead.status === STATUSES.CONFIRMED || lead.status === STATUSES.CLOSED) {
         console.log(`[sms/inbound] Lead #${lead.id} is ${lead.status} — message logged only`);
         res.type('text/xml');
         return res.send(twiml.toString());
