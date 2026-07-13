@@ -102,24 +102,22 @@ const WebhookController = {
       return;
     }
 
-    // Answer with voicemail TwiML first so the caller is not held in silence.
+    // Answer with voicemail TwiML. Create the lead now; send opt-in only after voicemail ends.
     markPendingOptIn(CallSid);
     appendVoicemailTwiML(response);
     res.type('text/xml');
     res.send(response.toString());
 
-    // Send opt-in on this same request after TwiML is flushed (Node keeps running).
-    // Voicemail-complete / call-status completed are backups.
     try {
-      await processMissedCall({ from: From, to: To, callSid: CallSid, sendSms: true });
+      await processMissedCall({ from: From, to: To, callSid: CallSid, sendSms: false });
     } catch (err) {
-      console.error('[voice/incoming] Opt-in SMS error:', err.message);
+      console.error('[voice/incoming] Lead create error:', err.message);
     }
   },
 
   /**
-   * Dial finished. If the owner answered, end quietly. If not, play disclosure + voicemail
-   * and send the opt-in SMS.
+   * Dial finished. If the owner answered, end quietly. If not, play disclosure + voicemail.
+   * Opt-in SMS waits until voicemail-complete.
    */
   async handleDialResult(req, res) {
     const { DialCallStatus, From, To, CallSid } = req.body;
@@ -139,15 +137,14 @@ const WebhookController = {
     res.send(response.toString());
 
     try {
-      await processMissedCall({ from: From, to: To, callSid: CallSid, sendSms: true });
+      await processMissedCall({ from: From, to: To, callSid: CallSid, sendSms: false });
     } catch (err) {
-      console.error('[voice/dial-result] Opt-in SMS error:', err.message);
+      console.error('[voice/dial-result] Lead create error:', err.message);
     }
   },
 
   /**
-   * After Record completes — thank the caller and hang up.
-   * Also retries opt-in SMS (no-ops if already sent for this call / cooldown).
+   * After Record completes (or silence timeout) — send the opt-in SMS, then thank + hang up.
    */
   async handleVoicemailComplete(req, res) {
     const { From, To, CallSid, RecordingDuration } = req.body;
@@ -174,7 +171,7 @@ const WebhookController = {
 
     console.log(`[voice/status] CallStatus=${CallStatus} From=${From} CallSid=${CallSid}`);
 
-    // Backup only for calls that entered voicemail (never after owner answered).
+    // Backup if caller hung up before Record's action URL ran (still pending opt-in).
     if (CallStatus === 'completed' && hasPendingOptIn(CallSid)) {
       try {
         await processMissedCall({ from: From, to: To, callSid: CallSid, sendSms: true });
