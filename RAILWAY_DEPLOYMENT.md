@@ -81,6 +81,9 @@ DEFAULT_ACCOUNT_ID=demo-account-1
 TWILIO_ACCOUNT_SID=<copy from local .env>
 TWILIO_AUTH_TOKEN=<copy from local .env>
 TWILIO_PHONE_NUMBER=<copy from local .env>
+OWNER_PHONE_NUMBER=<shop/mobile E.164 — rings first so you can pick up>
+OWNER_RING_TIMEOUT_SECONDS=25
+TWILIO_MESSAGING_SERVICE_SID=<optional>
 TWILIO_VALIDATE_SIGNATURE=true
 # Optional if using Messaging Service / A2P:
 # TWILIO_MESSAGING_SERVICE_SID=<MG...>

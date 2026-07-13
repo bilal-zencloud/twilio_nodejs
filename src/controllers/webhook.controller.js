@@ -5,6 +5,7 @@ const twilio = require('twilio');
 const VoiceResponse = twilio.twiml.VoiceResponse;
 const MessagingResponse = twilio.twiml.MessagingResponse;
 
+const config = require('../../config/env');
 const { forAccount } = require('../repositories');
 const LeadRepository = require('../repositories/LeadRepository');
 const MessageRepository = require('../repositories/MessageRepository');
@@ -17,7 +18,27 @@ const photoService = require('../services/photo.service');
 const consentCopy = require('../../config/consent');
 
 const MISSED_STATUSES = new Set(['no-answer', 'busy', 'failed', 'canceled']);
+const DIAL_MISSED = new Set(['no-answer', 'busy', 'failed', 'canceled']);
 const { STATUSES } = LeadRepository;
+
+/**
+ * TTS disclosure + Record. Always set `action` — without it Twilio re-requests
+ * the current webhook after Record and the greeting loops forever.
+ */
+function appendVoicemailTwiML(response) {
+  response.say({ voice: 'Polly.Joanna' }, consentCopy.VOICEMAIL_GREETING);
+  response.record({
+    maxLength: 120,
+    playBeep: true,
+    timeout: 5,
+    trim: 'trim-silence',
+    finishOnKey: '#',
+    action: '/webhooks/voice/voicemail-complete',
+    method: 'POST',
+  });
+  // Safety net if Record is skipped somehow
+  response.hangup();
+}
 
 /** Build lead update payload from AI extraction + current lead state. */
 function buildLeadUpdates(lead, result) {
@@ -50,35 +71,88 @@ function buildLeadUpdates(lead, result) {
 
 const WebhookController = {
   /**
-   * Answer the forwarded call with TTS disclosure + voicemail, then send the
-   * one-time opt-in SMS (qualifying starts only after YES).
+   * Incoming call on the Twilio number:
+   * 1) If OWNER_PHONE_NUMBER is set → ring the owner first (they can pick up).
+   * 2) Otherwise (carrier already forwarded after no-answer) → voicemail + opt-in.
    */
   handleIncomingCall(req, res) {
     const response = new VoiceResponse();
-    response.say({ voice: 'Polly.Joanna' }, consentCopy.VOICEMAIL_GREETING);
-    response.record({
-      maxLength: 120,
-      playBeep: true,
-      timeout: 5,
-      trim: 'trim-silence',
-    });
-    response.say({ voice: 'Polly.Joanna' }, consentCopy.VOICEMAIL_THANKS);
+    const ownerPhone = config.twilio.ownerPhoneNumber;
+    const { From, To, CallSid } = req.body;
 
+    if (ownerPhone) {
+      const dial = response.dial({
+        timeout: config.twilio.ownerRingTimeoutSeconds,
+        action: '/webhooks/voice/dial-result',
+        method: 'POST',
+        callerId: config.twilio.phoneNumber || undefined,
+        answerOnBridge: true,
+      });
+      dial.number(ownerPhone);
+
+      res.type('text/xml');
+      res.send(response.toString());
+      console.log(
+        `[voice/incoming] Dialing owner ${ownerPhone} (${config.twilio.ownerRingTimeoutSeconds}s) for ${From}`
+      );
+      return;
+    }
+
+    // No owner dial configured — assume call already forwarded after no-answer.
+    appendVoicemailTwiML(response);
     res.type('text/xml');
     res.send(response.toString());
 
-    const { From, To, CallSid } = req.body;
     processMissedCall({ from: From, to: To, callSid: CallSid }).catch((err) => {
       console.error('[voice/incoming] Error:', err.message);
     });
+  },
+
+  /**
+   * Dial finished. If the owner answered, end quietly. If not, play disclosure + voicemail
+   * and send the one-time opt-in SMS.
+   */
+  handleDialResult(req, res) {
+    const { DialCallStatus, From, To, CallSid } = req.body;
+    const response = new VoiceResponse();
+
+    console.log(`[voice/dial-result] DialCallStatus=${DialCallStatus} CallSid=${CallSid}`);
+
+    if (!DIAL_MISSED.has(DialCallStatus)) {
+      // Owner answered (completed) or unexpected success status — do not start AI flow.
+      response.hangup();
+      res.type('text/xml');
+      return res.send(response.toString());
+    }
+
+    appendVoicemailTwiML(response);
+    res.type('text/xml');
+    res.send(response.toString());
+
+    processMissedCall({ from: From, to: To, callSid: CallSid }).catch((err) => {
+      console.error('[voice/dial-result] Error:', err.message);
+    });
+  },
+
+  /**
+   * After Record completes (including silence timeout) — thank the caller and hang up.
+   * Without this separate action URL, Twilio re-requests /voice/incoming and loops.
+   */
+  handleVoicemailComplete(req, res) {
+    const response = new VoiceResponse();
+    response.say({ voice: 'Polly.Joanna' }, consentCopy.VOICEMAIL_THANKS);
+    response.hangup();
+    res.type('text/xml');
+    res.send(response.toString());
   },
 
   async handleCallStatus(req, res) {
     const { CallStatus, From, CallSid, To } = req.body;
     res.sendStatus(200);
 
-    // Backup path for carriers that report a missed status instead of connecting.
-    // When we answer with Say/Record, status is typically "completed" and is skipped.
+    // Backup path when carrier forwarding reports a missed status without Dial.
+    // Skipped when OWNER_PHONE_NUMBER is set — dial-result owns the missed path.
+    if (config.twilio.ownerPhoneNumber) return;
     if (!MISSED_STATUSES.has(CallStatus)) return;
 
     try {

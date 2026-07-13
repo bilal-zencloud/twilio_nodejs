@@ -17,6 +17,9 @@ const config = {
     phoneNumber: process.env.TWILIO_PHONE_NUMBER,
     messagingServiceSid: process.env.TWILIO_MESSAGING_SERVICE_SID || null,
     validateSignature: process.env.TWILIO_VALIDATE_SIGNATURE !== 'false',
+    // Owner/shop phone — dial first so someone can pick up before voicemail/opt-in
+    ownerPhoneNumber: process.env.OWNER_PHONE_NUMBER || null,
+    ownerRingTimeoutSeconds: parseInt(process.env.OWNER_RING_TIMEOUT_SECONDS || '25', 10),
   },
 
   anthropic: {

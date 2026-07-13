@@ -10,8 +10,10 @@ const router = express.Router();
 
 router.use(webhookLogger);
 
-// Voice: incoming call TwiML + status callback for missed calls
+// Voice: ring owner first (optional), then voicemail / opt-in on miss
 router.post('/voice/incoming', twilioValidator, WebhookController.handleIncomingCall);
+router.post('/voice/dial-result', twilioValidator, WebhookController.handleDialResult);
+router.post('/voice/voicemail-complete', twilioValidator, WebhookController.handleVoicemailComplete);
 router.post('/voice/status', twilioValidator, WebhookController.handleCallStatus);
 
 // SMS: inbound replies from callers

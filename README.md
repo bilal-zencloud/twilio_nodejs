@@ -58,6 +58,8 @@ Open `.env` in the project root and set each variable:
 | `TWILIO_ACCOUNT_SID` | **Yes** | From Twilio Console → Account Info | `ACxxxxxxxx` |
 | `TWILIO_AUTH_TOKEN` | **Yes** | From Twilio Console → Account Info | `your_auth_token` |
 | `TWILIO_PHONE_NUMBER` | **Yes** | Your Twilio number in E.164 format | `+19032807223` |
+| `OWNER_PHONE_NUMBER` | Recommended | Shop/mobile to ring before voicemail | `+19035551212` |
+| `OWNER_RING_TIMEOUT_SECONDS` | No | Seconds to ring owner (default 25) | `25` |
 | `TWILIO_VALIDATE_SIGNATURE` | No | Set `false` for local dev; set `true` in production | `false` |
 | `TWILIO_MESSAGING_SERVICE_SID` | No | Optional — use after A2P 10DLC registration | `MGxxxxxxxx` |
 | `ANTHROPIC_API_KEY` | **Yes** | From Anthropic Console | `sk-ant-...` |
@@ -444,9 +446,13 @@ On first run, prompts are seeded from `config/prompts.json`. After that, edit th
 Carrier / Twilio A2P campaigns require an explicit opt-in before conversational SMS. This app gates the AI Receptionist as follows:
 
 ```
-Missed / forwarded call
+Customer calls Twilio number
         ↓
-Twilio answers → TTS disclosure + voicemail (Record)
+OWNER_PHONE_NUMBER rings (owner can pick up)
+        ↓
+No answer / busy / failed
+        ↓
+Twilio TTS disclosure + voicemail (Record → hang up, no loop)
         ↓
 ONE fixed opt-in SMS
         ↓
@@ -458,9 +464,25 @@ Caller replies HELP           → fixed HELP SMS, stay awaiting_consent
 Anything else                 → one clarification SMS, stay awaiting_consent
 ```
 
+### Ring the owner first
+
+Set these on the **API** service (local `.env` and Railway):
+
+| Variable | Purpose |
+|---|---|
+| `OWNER_PHONE_NUMBER` | Your shop/mobile number in E.164 (e.g. `+19035551212`) — Twilio dials this first |
+| `OWNER_RING_TIMEOUT_SECONDS` | How long to ring before voicemail (default `25`) |
+
+If `OWNER_PHONE_NUMBER` is set, the greeting/opt-in SMS **only** run when you do not pick up. If left blank, Twilio assumes the call was already carrier-forwarded after no-answer and goes straight to voicemail (the previous “forwarded missed call” setup).
+
+**Important:** Do not set your carrier to “forward all calls immediately” to Twilio if you use `OWNER_PHONE_NUMBER` — that double-routes and skips ringing you. Either:
+
+1. Customers dial the **Twilio** number + `OWNER_PHONE_NUMBER` is set (app rings you first), or
+2. Customers dial your **business** number + carrier forwards **only on unanswered** to Twilio, and leave `OWNER_PHONE_NUMBER` blank.
+
 ### Voice greeting (Twilio Say + Record)
 
-Configured in `src/controllers/webhook.controller.js` using copy from `config/consent.js`. Callers hear the disclosure, then leave a voicemail after the tone.
+Configured in `src/controllers/webhook.controller.js` using copy from `config/consent.js`. After the tone, callers can leave a voicemail (or stay silent). Recording completion is handled by `/webhooks/voice/voicemail-complete` so the disclosure does **not** repeat.
 
 ### Fixed SMS copy
 
@@ -754,7 +776,9 @@ See [A2P SMS consent (double opt-in)](#a2p-sms-consent-double-opt-in) and [Wave 
 | GET | `/api/leads/:id` | Required | Lead detail with authenticated photo URLs |
 | GET | `/api/leads/:id/photos/:photoId` | Required | Streams private S3 photo after auth + tenant checks |
 | POST | `/api/leads/:id/confirm` | Required | Owner confirms — sends confirmation SMS |
-| POST | `/webhooks/voice/incoming` | Public | Answer call → TTS disclosure + voicemail + opt-in SMS |
+| POST | `/webhooks/voice/incoming` | Public | Dial owner (or voicemail if no owner configured) |
+| POST | `/webhooks/voice/dial-result` | Public | After Dial — voicemail + opt-in only if unanswered |
+| POST | `/webhooks/voice/voicemail-complete` | Public | After Record — thank caller and hang up (stops greeting loop) |
 | POST | `/webhooks/voice/status` | Public | Call status callback (backup missed-call path) |
 | POST | `/webhooks/sms/inbound` | Public | Consent gate + AI qualify after YES / MMS to S3 |
 
