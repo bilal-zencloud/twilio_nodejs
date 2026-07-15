@@ -4,7 +4,6 @@
 const consentCopy = require('../../config/consent');
 const LeadRepository = require('../repositories/LeadRepository');
 const MessageRepository = require('../repositories/MessageRepository');
-const aiService = require('./ai.service');
 const smsService = require('./sms.service');
 
 const { STATUSES } = LeadRepository;
@@ -44,6 +43,20 @@ function logSystemOutbound(messages, leadId, body) {
   });
 }
 
+/** Permanent consent proof payload when the caller replies YES / Y. */
+function buildVerifiedConsentFields(messageBody) {
+  const now = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
+  const reply = (messageBody || 'YES').trim().toUpperCase().replace(/[.!,]+$/g, '') || 'YES';
+
+  return {
+    sms_opted_in_at: now,
+    sms_consent_status: consentCopy.CONSENT_STATUS.VERIFIED,
+    sms_consent_method: consentCopy.CONSENT_METHOD,
+    sms_consent_reply: reply === 'Y' ? 'YES' : reply,
+    sms_consent_source: consentCopy.CONSENT_SOURCE,
+  };
+}
+
 /**
  * Handle an inbound SMS while the lead is waiting for SMS consent.
  */
@@ -70,21 +83,23 @@ async function handleAwaitingConsent({ lead, from, messageBody, account, leads, 
   }
 
   if (keyword === 'yes') {
-    const now = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
+    const consentFields = buildVerifiedConsentFields(messageBody);
     leads.update(lead.id, {
       status: STATUSES.QUALIFYING,
-      sms_opted_in_at: now,
+      ...consentFields,
     });
 
-    const greeting = await aiService.generateGreeting(account.id, account.name);
+    // Fixed opener after YES — not AI-generated.
     await sendAndLog({
       to: from,
-      body: greeting,
+      body: consentCopy.POST_OPT_IN_SMS,
       leadId: lead.id,
       messages,
     });
 
-    console.log(`[consent] Lead #${lead.id} opted in at ${now} — qualifying started`);
+    console.log(
+      `[consent] Lead #${lead.id} opted in at ${consentFields.sms_opted_in_at} — qualifying started`
+    );
     return { handled: true, action: 'yes' };
   }
 
@@ -99,28 +114,27 @@ async function handleAwaitingConsent({ lead, from, messageBody, account, leads, 
 }
 
 /**
- * Global STOP handling — Twilio Advanced Opt-Out sends the phone confirmation;
- * we only log that text so the dashboard matches the phone thread.
+ * Global STOP — Twilio Advanced Opt-Out sends the phone confirmation.
+ * Keep original YES consent proof on the lead (compliance audit trail).
  */
 function handleStopOptOut({ lead, leads, messages }) {
   leads.update(lead.id, {
     status: STATUSES.OPTED_OUT,
-    sms_opted_in_at: null,
+    sms_consent_status: consentCopy.CONSENT_STATUS.OPTED_OUT,
   });
   if (messages) {
     logSystemOutbound(messages, lead.id, consentCopy.STOP_ACK_SMS);
   }
-  console.log(`[consent] Lead #${lead.id} opted out via STOP`);
+  console.log(`[consent] Lead #${lead.id} opted out via STOP (consent proof retained)`);
   return { handled: true, action: 'stop' };
 }
 
 /**
- * START after STOP — Twilio re-subscribes; we reopen the consent gate and log the ack.
+ * START after STOP — reopen the consent gate; keep prior consent proof unless they YES again.
  */
 function handleStartResubscribe({ lead, leads, messages }) {
   leads.update(lead.id, {
     status: STATUSES.AWAITING_CONSENT,
-    sms_opted_in_at: null,
   });
   if (messages) {
     logSystemOutbound(messages, lead.id, consentCopy.START_ACK_SMS);
@@ -134,5 +148,6 @@ module.exports = {
   handleAwaitingConsent,
   handleStopOptOut,
   handleStartResubscribe,
+  buildVerifiedConsentFields,
   copy: consentCopy,
 };

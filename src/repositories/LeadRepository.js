@@ -173,6 +173,10 @@ class LeadRepository extends TenantScope {
       'confirmed_time',
       'call_sid',
       'sms_opted_in_at',
+      'sms_consent_status',
+      'sms_consent_method',
+      'sms_consent_reply',
+      'sms_consent_source',
     ];
     const sets = [];
     const params = { accountId: this.accountId, id };

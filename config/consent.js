@@ -25,12 +25,24 @@ const CLARIFICATION_SMS =
 
 const VOICEMAIL_THANKS = 'Thank you for your message. Goodbye.';
 
-/** Logged when Twilio Advanced Opt-Out sends its auto-reply (we don't send a second SMS). */
 const STOP_ACK_SMS =
   'You have successfully been unsubscribed. You will not receive any more messages from this number. Reply START to resubscribe.';
 
 const START_ACK_SMS =
   'You have successfully been re-subscribed to messages from this number. Reply HELP for help. Reply STOP to unsubscribe. Msg&Data rates may apply.';
+
+/** Fixed first SMS after the caller replies YES (not AI-generated). */
+const POST_OPT_IN_SMS =
+  "Thank you for confirming. To get started, could you tell us a little about the dent or hail damage you're looking to have repaired? Thanks.";
+
+/** Permanent consent proof labels stored on the lead. */
+const CONSENT_STATUS = {
+  VERIFIED: 'VERIFIED',
+  OPTED_OUT: 'OPTED_OUT',
+};
+
+const CONSENT_METHOD = 'Missed Call Double Opt-In';
+const CONSENT_SOURCE = 'Missed Call';
 
 module.exports = {
   VOICEMAIL_GREETING,
@@ -40,4 +52,8 @@ module.exports = {
   VOICEMAIL_THANKS,
   STOP_ACK_SMS,
   START_ACK_SMS,
+  POST_OPT_IN_SMS,
+  CONSENT_STATUS,
+  CONSENT_METHOD,
+  CONSENT_SOURCE,
 };

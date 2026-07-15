@@ -29,6 +29,22 @@ export function formatDate(iso: string): string {
   return new Date(iso).toLocaleString('en-US', DATE_FORMAT);
 }
 
+export function formatConsentDate(iso: string): string {
+  return new Date(iso).toLocaleDateString('en-US', {
+    month: 'long',
+    day: 'numeric',
+    year: 'numeric',
+  });
+}
+
+export function formatConsentTime(iso: string): string {
+  return new Date(iso).toLocaleTimeString('en-US', {
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: true,
+  });
+}
+
 export function truncate(text: string, max: number): string {
   if (text.length <= max) return text;
   return `${text.slice(0, max)}…`;

@@ -18,7 +18,7 @@ import {
 } from 'lucide-react';
 import { StatusBadge } from '@/components/status-badge';
 import { confirmLead } from '@/lib/api';
-import { cn, formatDate, formatPhone } from '@/lib/utils';
+import { cn, formatConsentDate, formatConsentTime, formatDate, formatPhone } from '@/lib/utils';
 import type { AppointmentType, Lead, Message, Photo } from '@/lib/types';
 
 interface LeadDetailProps {
@@ -115,13 +115,6 @@ export function LeadDetail({
               <InfoRow icon={Wrench} label="Need" value={lead.need_summary || '—'} className="sm:col-span-2" />
               <InfoRow icon={Clock} label="Preferred time" value={lead.preferred_time || '—'} />
               <InfoRow icon={MapPin} label="Location" value={lead.location || '—'} />
-              {lead.sms_opted_in_at && (
-                <InfoRow
-                  icon={CheckCircle2}
-                  label="SMS opted in"
-                  value={formatDate(lead.sms_opted_in_at)}
-                />
-              )}
               {lead.appointment_type && (
                 <InfoRow
                   icon={Search}
@@ -139,6 +132,37 @@ export function LeadDetail({
               Created {formatDate(lead.created_at)} · Updated {formatDate(lead.updated_at)}
             </p>
           </div>
+
+          {(lead.sms_opted_in_at || lead.sms_consent_status) && (
+            <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+              <div className="flex items-center gap-2">
+                <CheckCircle2 className="h-5 w-5 text-teal-600" />
+                <h2 className="text-lg font-semibold text-slate-900">SMS Consent</h2>
+              </div>
+              <dl className="mt-4 grid gap-3 sm:grid-cols-2">
+                <ConsentRow
+                  label="Status"
+                  value={lead.sms_consent_status || (lead.sms_opted_in_at ? 'VERIFIED' : '—')}
+                />
+                <ConsentRow
+                  label="Method"
+                  value={lead.sms_consent_method || 'Missed Call Double Opt-In'}
+                />
+                <ConsentRow label="Reply received" value={lead.sms_consent_reply || 'YES'} />
+                <ConsentRow label="Phone number" value={formatPhone(lead.caller_phone)} />
+                <ConsentRow
+                  label="Opt-in source"
+                  value={lead.sms_consent_source || 'Missed Call'}
+                />
+                {lead.sms_opted_in_at && (
+                  <>
+                    <ConsentRow label="Date" value={formatConsentDate(lead.sms_opted_in_at)} />
+                    <ConsentRow label="Time" value={formatConsentTime(lead.sms_opted_in_at)} />
+                  </>
+                )}
+              </dl>
+            </div>
+          )}
 
           {photos.length > 0 && (
             <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
@@ -332,6 +356,15 @@ function InfoRow({
         <dt className="text-xs font-medium uppercase tracking-wide text-slate-500">{label}</dt>
         <dd className="mt-0.5 text-sm text-slate-900">{value}</dd>
       </div>
+    </div>
+  );
+}
+
+function ConsentRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div>
+      <dt className="text-xs font-medium uppercase tracking-wide text-slate-500">{label}</dt>
+      <dd className="mt-0.5 text-sm font-medium text-slate-900">{value}</dd>
     </div>
   );
 }

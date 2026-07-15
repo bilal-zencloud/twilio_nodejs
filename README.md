@@ -395,7 +395,7 @@ AI behavior (greeting tone, qualifying questions, field extraction) is stored in
 
 | `prompt_type` | Used when |
 |---|---|
-| `greeting` | First **AI** SMS after the caller replies YES (consent gate already sent) |
+| `greeting` | Unused for post-YES opener (fixed text in `config/consent.js`); retained for compatibility |
 | `qualify` | Processing further SMS replies — captures name, need, preferred time, location |
 | `confirmation` | Owner confirms from dashboard — sends appointment confirmation SMS |
 
@@ -458,7 +458,7 @@ ONE fixed opt-in SMS
         ↓
 Lead status: awaiting_consent  (no AI messages)
         ↓
-Caller replies YES / Y        → sms_opted_in_at set, AI greeting, then qualify flow
+Caller replies YES / Y        → permanent SMS consent proof saved, fixed confirming SMS, then qualify flow
 Caller replies STOP           → opted_out (no further automated texts)
 Caller replies HELP           → fixed HELP SMS, stay awaiting_consent
 Anything else                 → one clarification SMS, stay awaiting_consent
@@ -489,16 +489,24 @@ Configured in `src/controllers/webhook.controller.js` using copy from `config/co
 | Trigger | Source |
 |---|---|
 | Opt-in (post-call) | `config/consent.js` → `OPT_IN_SMS` |
+| After YES | `POST_OPT_IN_SMS` (fixed confirming / damage question) |
 | HELP | `HELP_SMS` |
 | Unrecognized reply while waiting | `CLARIFICATION_SMS` |
 
 ### Consent logging
 
-Retained without a separate report UI:
+Retained on the lead (and shown on the lead detail page) without a separate report UI:
 
-- inbound **YES** in `messages` (conversation history)
-- `leads.sms_opted_in_at` timestamp
-- phone number on the lead
+| Field | Example |
+|---|---|
+| `sms_consent_status` | `VERIFIED` (or `OPTED_OUT` after STOP — original proof kept) |
+| `sms_consent_method` | `Missed Call Double Opt-In` |
+| `sms_consent_reply` | `YES` |
+| `sms_consent_source` | `Missed Call` |
+| `sms_opted_in_at` | Date/time of affirmative reply |
+| `caller_phone` | Phone number |
+
+Inbound YES is also stored in `messages` conversation history.
 
 ### Lead status flow (with consent)
 

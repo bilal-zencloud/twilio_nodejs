@@ -24,6 +24,10 @@ export interface Lead {
   appointment_type: AppointmentType | null;
   confirmed_time: string | null;
   sms_opted_in_at: string | null;
+  sms_consent_status: string | null;
+  sms_consent_method: string | null;
+  sms_consent_reply: string | null;
+  sms_consent_source: string | null;
   call_sid: string | null;
   created_at: string;
   updated_at: string;

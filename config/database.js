@@ -97,10 +97,22 @@ function migrateAdminsAndStorage() {
   }
 }
 
-/** A2P SMS consent — retain affirmative opt-in timestamp. */
+/** A2P SMS consent — retain affirmative opt-in proof permanently. */
 function migrateConsentSchema() {
   if (!columnExists('leads', 'sms_opted_in_at')) {
     db.exec('ALTER TABLE leads ADD COLUMN sms_opted_in_at TEXT');
+  }
+  if (!columnExists('leads', 'sms_consent_status')) {
+    db.exec('ALTER TABLE leads ADD COLUMN sms_consent_status TEXT');
+  }
+  if (!columnExists('leads', 'sms_consent_method')) {
+    db.exec('ALTER TABLE leads ADD COLUMN sms_consent_method TEXT');
+  }
+  if (!columnExists('leads', 'sms_consent_reply')) {
+    db.exec('ALTER TABLE leads ADD COLUMN sms_consent_reply TEXT');
+  }
+  if (!columnExists('leads', 'sms_consent_source')) {
+    db.exec('ALTER TABLE leads ADD COLUMN sms_consent_source TEXT');
   }
 }
 
@@ -129,6 +141,10 @@ function initializeSchema() {
       confirmed_time TEXT,
       call_sid TEXT,
       sms_opted_in_at TEXT,
+      sms_consent_status TEXT,
+      sms_consent_method TEXT,
+      sms_consent_reply TEXT,
+      sms_consent_source TEXT,
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       updated_at TEXT NOT NULL DEFAULT (datetime('now')),
       FOREIGN KEY (account_id) REFERENCES accounts(id)
