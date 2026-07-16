@@ -4,11 +4,11 @@
  */
 const VOICEMAIL_GREETING =
   "Thank you for calling Preferred Paintless Services. We're sorry we missed your call. " +
-  "We're sending you one text message now asking whether you'd like to continue your " +
-  'Paintless Dent Repair request by text. To opt in, simply reply YES. If you do not reply YES, ' +
-  'you will not receive any additional text messages regarding this request. Message frequency varies. ' +
-  'Message and data rates may apply. Reply STOP to opt out or HELP for help. ' +
-  'Please leave your name, phone number, and a brief description of your vehicle after the tone.';
+  "We're sending you one text message asking whether you'd like to continue your paintless dent repair " +
+  'request by text. To opt in, simply reply YES. If you do not reply YES, you will not receive any ' +
+  'additional text messages regarding this request. Message frequency varies. Message and data rates may apply. ' +
+  'Reply STOP to opt out or HELP for help. If you prefer not to communicate by text, simply leave your name, ' +
+  "phone number, and a brief description of your vehicle after the tone, and we'll return your call as soon as possible.";
 
 const OPT_IN_SMS =
   'Preferred Paintless Services: Thanks for calling us. Reply YES to continue your paintless dent repair ' +
@@ -33,7 +33,8 @@ const START_ACK_SMS =
 
 /** Fixed first SMS after the caller replies YES (not AI-generated). */
 const POST_OPT_IN_SMS =
-  "Thank you for confirming. To get started, could you tell us a little about the dent or hail damage you're looking to have repaired? Thanks.";
+  "Thank you for confirming. We're happy to help with your paintless dent repair request. " +
+  "To get started, could you tell us a little about the dent or hail damage you're looking to have repaired?";
 
 /** Permanent consent proof labels stored on the lead. */
 const CONSENT_STATUS = {
