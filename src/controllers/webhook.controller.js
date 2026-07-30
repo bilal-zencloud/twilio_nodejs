@@ -22,12 +22,11 @@ const DIAL_MISSED = new Set(['no-answer', 'busy', 'failed', 'canceled']);
 const { STATUSES } = LeadRepository;
 
 /**
- * TTS disclosure + Record. Always set absolute `action` — relative URLs can break
- * signature validation / routing behind proxies, and missing action loops the greeting.
+ * TTS disclosure + Record.
+ * Prefer relative action URLs so Record always posts back to the same public host
+ * Twilio used for /voice/incoming (avoids stale APP_URL after Railway moves).
  */
 function appendVoicemailTwiML(response) {
-  const actionUrl = `${config.appUrl.replace(/\/$/, '')}/webhooks/voice/voicemail-complete`;
-
   response.say({ voice: 'Polly.Joanna' }, consentCopy.VOICEMAIL_GREETING);
   response.record({
     maxLength: 120,
@@ -35,7 +34,7 @@ function appendVoicemailTwiML(response) {
     timeout: 5,
     trim: 'trim-silence',
     finishOnKey: '#',
-    action: actionUrl,
+    action: '/webhooks/voice/voicemail-complete',
     method: 'POST',
   });
   // Safety net if Record is skipped somehow
@@ -87,7 +86,7 @@ const WebhookController = {
     if (ownerPhone) {
       const dial = response.dial({
         timeout: config.twilio.ownerRingTimeoutSeconds,
-        action: `${config.appUrl.replace(/\/$/, '')}/webhooks/voice/dial-result`,
+        action: '/webhooks/voice/dial-result',
         method: 'POST',
         callerId: config.twilio.phoneNumber || undefined,
         answerOnBridge: true,
@@ -144,7 +143,9 @@ const WebhookController = {
   },
 
   /**
-   * After Record completes (or silence timeout) — send the opt-in SMS, then thank + hang up.
+   * After Record completes (or silence timeout) — hang up quickly, then send opt-in SMS.
+   * Returning TwiML first is required: if we await SMS before responding, Twilio times out
+   * and re-requests /voice/incoming, which loops the greeting.
    */
   async handleVoicemailComplete(req, res) {
     const { From, To, CallSid, RecordingDuration } = req.body;
@@ -152,17 +153,17 @@ const WebhookController = {
       `[voice/voicemail-complete] From=${From} To=${To} CallSid=${CallSid} RecordingDuration=${RecordingDuration}`
     );
 
-    try {
-      await processMissedCall({ from: From, to: To, callSid: CallSid, sendSms: true });
-    } catch (err) {
-      console.error('[voice/voicemail-complete] Opt-in SMS error:', err.message);
-    }
-
     const response = new VoiceResponse();
     response.say({ voice: 'Polly.Joanna' }, consentCopy.VOICEMAIL_THANKS);
     response.hangup();
     res.type('text/xml');
     res.send(response.toString());
+
+    try {
+      await processMissedCall({ from: From, to: To, callSid: CallSid, sendSms: true });
+    } catch (err) {
+      console.error('[voice/voicemail-complete] Opt-in SMS error:', err.message);
+    }
   },
 
   async handleCallStatus(req, res) {
