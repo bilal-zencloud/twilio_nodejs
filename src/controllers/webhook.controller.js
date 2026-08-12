@@ -1,6 +1,8 @@
 /**
  * Webhook controller — Twilio voice & SMS event handlers.
  */
+const fs = require('fs');
+const path = require('path');
 const twilio = require('twilio');
 const VoiceResponse = twilio.twiml.VoiceResponse;
 const MessagingResponse = twilio.twiml.MessagingResponse;
@@ -21,13 +23,22 @@ const MISSED_STATUSES = new Set(['no-answer', 'busy', 'failed', 'canceled']);
 const DIAL_MISSED = new Set(['no-answer', 'busy', 'failed', 'canceled']);
 const { STATUSES } = LeadRepository;
 
+const GREETING_AUDIO_FILE = path.join(__dirname, '../../assets/audio/voicemail-greeting.mp3');
+
 /**
- * TTS disclosure + Record.
- * Prefer relative action URLs so Record always posts back to the same public host
- * Twilio used for /voice/incoming (avoids stale APP_URL after Railway moves).
+ * Owner-recorded greeting + voicemail Record.
+ * Opt-in SMS is sent when this flow starts (while the caller is still listening).
  */
 function appendVoicemailTwiML(response) {
-  response.say({ voice: 'Polly.Joanna' }, consentCopy.VOICEMAIL_GREETING);
+  if (fs.existsSync(GREETING_AUDIO_FILE)) {
+    // Absolute URL so Twilio can fetch the file after Railway domain changes.
+    const audioUrl = `${config.appUrl.replace(/\/$/, '')}${consentCopy.VOICEMAIL_GREETING_AUDIO_PATH}`;
+    response.play(audioUrl);
+  } else {
+    console.warn('[voice] Greeting audio missing — falling back to TTS');
+    response.say({ voice: 'Polly.Joanna' }, consentCopy.VOICEMAIL_GREETING);
+  }
+
   response.record({
     maxLength: 120,
     playBeep: true,
@@ -37,8 +48,21 @@ function appendVoicemailTwiML(response) {
     action: '/webhooks/voice/voicemail-complete',
     method: 'POST',
   });
-  // Safety net if Record is skipped somehow
   response.hangup();
+}
+
+/** Start voicemail + fire opt-in SMS immediately (lands during the ~24s recording). */
+async function startVoicemailAndOptIn({ response, res, from, to, callSid, logPrefix }) {
+  markPendingOptIn(callSid);
+  appendVoicemailTwiML(response);
+  res.type('text/xml');
+  res.send(response.toString());
+
+  try {
+    await processMissedCall({ from, to, callSid, sendSms: true });
+  } catch (err) {
+    console.error(`${logPrefix} Opt-in SMS error:`, err.message);
+  }
 }
 
 /** Build lead update payload from AI extraction + current lead state. */
@@ -74,7 +98,7 @@ const WebhookController = {
   /**
    * Incoming call on the Twilio number:
    * 1) If OWNER_PHONE_NUMBER is set → ring the owner first (they can pick up).
-   * 2) Otherwise (carrier already forwarded after no-answer) → voicemail + opt-in.
+   * 2) Otherwise → recorded greeting + voicemail; opt-in SMS fires as greeting starts.
    */
   async handleIncomingCall(req, res) {
     const response = new VoiceResponse();
@@ -101,22 +125,18 @@ const WebhookController = {
       return;
     }
 
-    // Answer with voicemail TwiML. Create the lead now; send opt-in only after voicemail ends.
-    markPendingOptIn(CallSid);
-    appendVoicemailTwiML(response);
-    res.type('text/xml');
-    res.send(response.toString());
-
-    try {
-      await processMissedCall({ from: From, to: To, callSid: CallSid, sendSms: false });
-    } catch (err) {
-      console.error('[voice/incoming] Lead create error:', err.message);
-    }
+    await startVoicemailAndOptIn({
+      response,
+      res,
+      from: From,
+      to: To,
+      callSid: CallSid,
+      logPrefix: '[voice/incoming]',
+    });
   },
 
   /**
-   * Dial finished. If the owner answered, end quietly. If not, play disclosure + voicemail.
-   * Opt-in SMS waits until voicemail-complete.
+   * Dial finished. If the owner answered, end quietly. If not, play recording + send opt-in.
    */
   async handleDialResult(req, res) {
     const { DialCallStatus, From, To, CallSid } = req.body;
@@ -130,22 +150,19 @@ const WebhookController = {
       return res.send(response.toString());
     }
 
-    markPendingOptIn(CallSid);
-    appendVoicemailTwiML(response);
-    res.type('text/xml');
-    res.send(response.toString());
-
-    try {
-      await processMissedCall({ from: From, to: To, callSid: CallSid, sendSms: false });
-    } catch (err) {
-      console.error('[voice/dial-result] Lead create error:', err.message);
-    }
+    await startVoicemailAndOptIn({
+      response,
+      res,
+      from: From,
+      to: To,
+      callSid: CallSid,
+      logPrefix: '[voice/dial-result]',
+    });
   },
 
   /**
-   * After Record completes (or silence timeout) — hang up quickly, then send opt-in SMS.
-   * Returning TwiML first is required: if we await SMS before responding, Twilio times out
-   * and re-requests /voice/incoming, which loops the greeting.
+   * After Record completes — thank caller and hang up.
+   * Opt-in SMS should already have been sent when the greeting started; this is a backup only.
    */
   async handleVoicemailComplete(req, res) {
     const { From, To, CallSid, RecordingDuration } = req.body;
@@ -159,10 +176,12 @@ const WebhookController = {
     res.type('text/xml');
     res.send(response.toString());
 
-    try {
-      await processMissedCall({ from: From, to: To, callSid: CallSid, sendSms: true });
-    } catch (err) {
-      console.error('[voice/voicemail-complete] Opt-in SMS error:', err.message);
+    if (hasPendingOptIn(CallSid)) {
+      try {
+        await processMissedCall({ from: From, to: To, callSid: CallSid, sendSms: true });
+      } catch (err) {
+        console.error('[voice/voicemail-complete] Opt-in backup error:', err.message);
+      }
     }
   },
 
@@ -172,7 +191,7 @@ const WebhookController = {
 
     console.log(`[voice/status] CallStatus=${CallStatus} From=${From} CallSid=${CallSid}`);
 
-    // Backup if caller hung up before Record's action URL ran (still pending opt-in).
+    // Backup if caller hung up before opt-in SMS was sent.
     if (CallStatus === 'completed' && hasPendingOptIn(CallSid)) {
       try {
         await processMissedCall({ from: From, to: To, callSid: CallSid, sendSms: true });

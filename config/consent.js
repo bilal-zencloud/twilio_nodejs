@@ -1,14 +1,16 @@
 /**
  * A2P / carrier-compliant SMS consent copy.
  * Keep wording aligned with the approved campaign disclosure.
+ *
+ * Voice greeting is played from assets/audio/voicemail-greeting.mp3 (owner recording).
+ * VOICEMAIL_GREETING below is the script of that recording and a TTS fallback.
  */
 const VOICEMAIL_GREETING =
-  "Thank you for calling Preferred Paintless Services. We're sorry we missed your call. " +
-  "We're sending you one text message asking whether you'd like to continue your paintless dent repair " +
-  'request by text. To opt in, simply reply YES. If you do not reply YES, you will not receive any ' +
-  'additional text messages regarding this request. Message frequency varies. Message and data rates may apply. ' +
-  'Reply STOP to opt out or HELP for help. If you prefer not to communicate by text, simply leave your name, ' +
-  "phone number, and a brief description of your vehicle after the tone, and we'll return your call as soon as possible.";
+  "Hi, you've reached Preferred Paintless Services. I'm sorry I missed your call. " +
+  "Please listen to this message until the end. In just a moment, you'll receive a text message " +
+  "asking you to reply YES if you'd like to continue your paintless dent repair request by text. " +
+  'If you prefer, you can also leave a voicemail after the tone with your name, phone number, ' +
+  'and a brief description of your vehicle and the damage. Thank you, and we look forward to helping you.';
 
 const OPT_IN_SMS =
   'Preferred Paintless Services: Thanks for calling us. Reply YES to continue your paintless dent repair ' +
@@ -45,6 +47,9 @@ const CONSENT_STATUS = {
 const CONSENT_METHOD = 'Missed Call Double Opt-In';
 const CONSENT_SOURCE = 'Missed Call';
 
+/** Public path Twilio fetches for the owner-recorded greeting (mounted on the API). */
+const VOICEMAIL_GREETING_AUDIO_PATH = '/media/voicemail-greeting.mp3';
+
 module.exports = {
   VOICEMAIL_GREETING,
   OPT_IN_SMS,
@@ -57,4 +62,5 @@ module.exports = {
   CONSENT_STATUS,
   CONSENT_METHOD,
   CONSENT_SOURCE,
+  VOICEMAIL_GREETING_AUDIO_PATH,
 };

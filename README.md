@@ -1,6 +1,6 @@
 # Missed Call Capture
 
-When a call goes unanswered (or is forwarded to the AI Receptionist), Twilio plays a text-to-speech disclosure and voicemail prompt, texts the caller **one** A2P opt-in SMS, and waits for **YES** before any AI qualifying conversation. After consent, the existing SMS estimate / scheduling / photo / dashboard flow continues unchanged.
+When a call goes unanswered (or is forwarded to the AI Receptionist), Twilio plays an **owner-recorded** disclosure, texts the caller **one** A2P opt-in SMS while they are still listening, then offers voicemail. The AI qualifying conversation starts only after they reply **YES**. After consent, the existing SMS estimate / scheduling / photo / dashboard flow continues unchanged.
 
 ---
 
@@ -452,9 +452,9 @@ OWNER_PHONE_NUMBER rings (owner can pick up)
         ↓
 No answer / busy / failed
         ↓
-Twilio TTS disclosure + voicemail (Record → hang up, no loop)
+Owner-recorded greeting plays + ONE opt-in SMS (sent as greeting starts)
         ↓
-ONE fixed opt-in SMS
+Voicemail after the tone (Record → hang up, no loop)
         ↓
 Lead status: awaiting_consent  (no AI messages)
         ↓
@@ -480,9 +480,11 @@ If `OWNER_PHONE_NUMBER` is set, the greeting/opt-in SMS **only** run when you do
 1. Customers dial the **Twilio** number + `OWNER_PHONE_NUMBER` is set (app rings you first), or
 2. Customers dial your **business** number + carrier forwards **only on unanswered** to Twilio, and leave `OWNER_PHONE_NUMBER` blank.
 
-### Voice greeting (Twilio Say + Record)
+### Voice greeting (owner recording + Record)
 
-Configured in `src/controllers/webhook.controller.js` using copy from `config/consent.js`. After the tone, callers can leave a voicemail (or stay silent). Recording completion is handled by `/webhooks/voice/voicemail-complete` so the disclosure does **not** repeat.
+The greeting audio is `assets/audio/voicemail-greeting.mp3`, served publicly at `/media/voicemail-greeting.mp3` for Twilio `<Play>`. Script text (and TTS fallback) lives in `config/consent.js`.
+
+The opt-in SMS is sent **when the greeting starts** so it arrives while the caller is still listening (~24s recording). After the tone, callers can leave a voicemail. `/webhooks/voice/voicemail-complete` hangs up without replaying the greeting.
 
 ### Fixed SMS copy
 
