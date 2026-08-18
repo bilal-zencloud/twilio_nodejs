@@ -34,7 +34,7 @@ export function LeadDetail({
   initialLead,
   messages,
   photos,
-  voicemails,
+  voicemails = [],
   accountId,
   appointmentTypes,
 }: LeadDetailProps) {
@@ -47,6 +47,7 @@ export function LeadDetail({
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
   const [closedNotice, setClosedNotice] = useState(false);
+  const [closing, setClosing] = useState(false);
   const [lightbox, setLightbox] = useState<string | null>(null);
 
   const canConfirm = lead.status === 'pending_confirmation';
@@ -140,7 +141,19 @@ export function LeadDetail({
                 </h1>
                 <p className="mt-1 text-sm text-slate-500">Lead #{lead.id}</p>
               </div>
-              <StatusBadge status={lead.status} pulse={canConfirm} />
+              <div className="flex flex-wrap items-center gap-2">
+                <StatusBadge status={lead.status} pulse={canConfirm} />
+                {canClose && (
+                  <button
+                    type="button"
+                    onClick={handleClose}
+                    disabled={closing}
+                    className="inline-flex items-center rounded-full border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-800 transition hover:bg-slate-50 disabled:opacity-60"
+                  >
+                    {closing ? 'Closing…' : 'Close Lead'}
+                  </button>
+                )}
+              </div>
             </div>
 
             <dl className="mt-6 grid gap-4 sm:grid-cols-2">

@@ -15,6 +15,7 @@ import {
 } from 'lucide-react';
 import { StatusBadge } from '@/components/status-badge';
 import { StatCard } from '@/components/stat-card';
+import { closeLead } from '@/lib/api';
 import { cn, formatDate, formatPhone, truncate } from '@/lib/utils';
 import type { Lead, LeadPagination, LeadStats, LeadStatus } from '@/lib/types';
 
@@ -51,6 +52,7 @@ export function LeadsDashboard({
   const [filter, setFilter] = useState<(typeof FILTERS)[number]['id']>(
     (pagination.status as (typeof FILTERS)[number]['id']) || 'all'
   );
+  const [closingId, setClosingId] = useState<number | null>(null);
 
   const start = pagination.total === 0 ? 0 : (pagination.page - 1) * pagination.limit + 1;
   const end = Math.min(pagination.page * pagination.limit, pagination.total);
@@ -96,6 +98,21 @@ export function LeadsDashboard({
   function handleFilter(nextFilter: (typeof FILTERS)[number]['id']) {
     setFilter(nextFilter);
     router.push(buildHref({ page: 1, status: nextFilter }));
+  }
+
+  async function handleCloseLead(leadId: number) {
+    if (!window.confirm('Close this lead? Messages, photos, and voicemails will be kept.')) {
+      return;
+    }
+    setClosingId(leadId);
+    try {
+      await closeLead(leadId);
+      router.refresh();
+    } catch (err) {
+      window.alert(err instanceof Error ? err.message : 'Could not close lead');
+    } finally {
+      setClosingId(null);
+    }
   }
 
   return (
@@ -177,6 +194,7 @@ export function LeadsDashboard({
                   <th className="px-5 py-3 font-semibold">Location</th>
                   <th className="px-5 py-3 font-semibold">Created</th>
                   <th className="px-5 py-3 font-semibold">Last activity</th>
+                  <th className="px-5 py-3 font-semibold"> </th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
@@ -221,6 +239,20 @@ export function LeadsDashboard({
                     <td className="px-5 py-4 text-slate-500">{formatDate(lead.created_at)}</td>
                     <td className="px-5 py-4 text-slate-500">
                       {lead.last_activity_at ? formatDate(lead.last_activity_at) : '—'}
+                    </td>
+                    <td className="px-5 py-4 text-right">
+                      {lead.status !== 'closed' ? (
+                        <button
+                          type="button"
+                          onClick={() => handleCloseLead(lead.id)}
+                          disabled={closingId === lead.id}
+                          className="rounded-lg border border-slate-200 px-2.5 py-1 text-xs font-semibold text-slate-700 transition hover:bg-slate-100 disabled:opacity-60"
+                        >
+                          {closingId === lead.id ? 'Closing…' : 'Close'}
+                        </button>
+                      ) : (
+                        <span className="text-xs text-slate-400">—</span>
+                      )}
                     </td>
                   </tr>
                 ))}
