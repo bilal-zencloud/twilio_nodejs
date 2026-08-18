@@ -50,7 +50,7 @@ function buildIntakeSummary({ lead, lastMessage, photoLinks, voicemailUrl }) {
   }
 
   if (photoLinks.length) {
-    lines.push('', 'Photos:');
+    lines.push('', 'Photos (private 7-day links):');
     photoLinks.forEach((url, i) => lines.push(`${i + 1}. ${url}`));
   } else {
     lines.push('', 'Photos: none');
@@ -78,7 +78,7 @@ function buildFollowUpNotice({ lead, messageBody, photoLinks }) {
   ];
 
   if (photoLinks.length) {
-    lines.push('', 'Photos:');
+    lines.push('', 'Photos (private 7-day links):');
     photoLinks.forEach((url, i) => lines.push(`${i + 1}. ${url}`));
   }
 
@@ -108,11 +108,11 @@ function buildRepeatCallNotice({ lead, voicemailUrl, duration }) {
   return lines.join('\n');
 }
 
-async function logOwnerCopy(messages, leadId, body) {
+async function logOwnerCopy(messages, leadId, body, kind = 'notice') {
   messages.create({
     leadId,
     direction: MessageRepository.DIRECTIONS.OUTBOUND,
-    body: `[to Devin]\n${body}`,
+    body: `[to Devin · ${kind}]\n${body}`,
   });
 }
 
@@ -135,10 +135,16 @@ async function completeIntake({ accountId, lead, lastMessage }) {
 
   try {
     await smsService.sendOwnerMessage(summary, { mediaUrl: photoLinks });
-    await logOwnerCopy(messages, fresh.id, summary);
-    console.log(`[handoff] Owner summary sent for lead #${fresh.id}`);
+    await logOwnerCopy(messages, fresh.id, summary, 'summary');
+    console.log(`[handoff] Owner summary sent for lead #${fresh.id}\n${summary}`);
   } catch (err) {
     console.error('[handoff] Owner summary failed:', err.message);
+    await logOwnerCopy(
+      messages,
+      fresh.id,
+      `SEND FAILED: ${err.message}\n\n${summary}`,
+      'summary'
+    );
   }
 
   await smsService.sendSmsAndConfirm(fresh.caller_phone, consentCopy.HANDOFF_SMS, { waitMs: 0 });
@@ -165,8 +171,8 @@ async function forwardToOwner({ accountId, lead, messageBody, photos: photoRows 
 
   try {
     await smsService.sendOwnerMessage(body, { mediaUrl: photoLinks });
-    await logOwnerCopy(messages, lead.id, body);
-    console.log(`[handoff] Follow-up forwarded for lead #${lead.id}`);
+    await logOwnerCopy(messages, lead.id, body, 'follow-up');
+    console.log(`[handoff] Follow-up forwarded for lead #${lead.id}\n${body}`);
   } catch (err) {
     console.error('[handoff] Follow-up forward failed:', err.message);
   }
@@ -183,8 +189,8 @@ async function notifyRepeatCall({ accountId, lead, voicemail }) {
 
   try {
     await smsService.sendOwnerMessage(body);
-    await logOwnerCopy(messages, lead.id, body);
-    console.log(`[handoff] Repeat-call notice sent for lead #${lead.id}`);
+    await logOwnerCopy(messages, lead.id, body, 'repeat-call');
+    console.log(`[handoff] Repeat-call notice sent for lead #${lead.id}\n${body}`);
   } catch (err) {
     console.error('[handoff] Repeat-call notice failed:', err.message);
   }

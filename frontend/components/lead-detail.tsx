@@ -17,6 +17,7 @@ import {
   ZoomIn,
 } from 'lucide-react';
 import { StatusBadge } from '@/components/status-badge';
+import { ConfirmDialog } from '@/components/confirm-dialog';
 import { confirmLead, closeLead } from '@/lib/api';
 import { cn, formatConsentDate, formatConsentTime, formatDate, formatPhone } from '@/lib/utils';
 import type { AppointmentType, Lead, Message, Photo, Voicemail } from '@/lib/types';
@@ -48,10 +49,13 @@ export function LeadDetail({
   const [success, setSuccess] = useState(false);
   const [closedNotice, setClosedNotice] = useState(false);
   const [closing, setClosing] = useState(false);
+  const [confirmClose, setConfirmClose] = useState(false);
   const [lightbox, setLightbox] = useState<string | null>(null);
 
   const canConfirm = lead.status === 'pending_confirmation';
   const canClose = lead.status !== 'closed';
+  const ownerNotices = messages.filter((msg) => msg.body.startsWith('[to Devin'));
+  const customerMessages = messages.filter((msg) => !msg.body.startsWith('[to Devin'));
 
   async function handleConfirm(e: React.FormEvent) {
     e.preventDefault();
@@ -74,15 +78,17 @@ export function LeadDetail({
   }
 
   async function handleClose() {
-    if (!window.confirm('Close this lead? Messages, photos, and voicemails will be kept.')) {
-      return;
-    }
+    setConfirmClose(true);
+  }
+
+  async function confirmCloseLead() {
     setClosing(true);
     setError(null);
     try {
       const result = await closeLead(lead.id);
       setLead(result.lead);
       setClosedNotice(true);
+      setConfirmClose(false);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not close lead');
     } finally {
@@ -259,16 +265,45 @@ export function LeadDetail({
                   </button>
                 ))}
               </div>
+              <p className="mt-3 text-xs text-slate-500">
+                Dashboard photos load through your login. Devin receives the same files as private
+                7-day signed links in the SMS (and as MMS when the carrier allows).
+              </p>
+            </div>
+          )}
+
+          {ownerNotices.length > 0 && (
+            <div className="rounded-2xl border border-indigo-200 bg-indigo-50/60 p-6 shadow-sm">
+              <h2 className="text-lg font-semibold text-slate-900">Sent to Devin</h2>
+              <p className="mt-1 text-sm text-slate-600">
+                Exact copies of SMS summaries and forwards. Photo lines are signed S3 URLs.
+              </p>
+              <div className="mt-4 space-y-3">
+                {ownerNotices.map((msg) => {
+                  const parsed = parseOwnerNotice(msg.body);
+                  return (
+                    <div
+                      key={msg.id}
+                      className="rounded-xl border border-indigo-100 bg-white px-4 py-3 text-sm text-slate-800"
+                    >
+                      <p className="text-xs font-semibold uppercase tracking-wide text-indigo-700">
+                        {ownerKindLabel(parsed.kind)} · {formatDate(msg.created_at)}
+                      </p>
+                      <LinkedText text={parsed.text} className="mt-2" />
+                    </div>
+                  );
+                })}
+              </div>
             </div>
           )}
 
           <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
             <h2 className="text-lg font-semibold text-slate-900">Conversation</h2>
             <div className="mt-4 space-y-3">
-              {messages.length === 0 ? (
-                <p className="text-sm text-slate-500">No messages yet.</p>
+              {customerMessages.length === 0 ? (
+                <p className="text-sm text-slate-500">No customer messages yet.</p>
               ) : (
-                messages.map((msg) => (
+                customerMessages.map((msg) => (
                   <div
                     key={msg.id}
                     className={cn(
@@ -278,7 +313,7 @@ export function LeadDetail({
                         : 'ml-auto rounded-br-md bg-slate-900 text-white'
                     )}
                   >
-                    <p className="whitespace-pre-wrap">{msg.body}</p>
+                    <LinkedText text={msg.body} />
                     <p
                       className={cn(
                         'mt-1.5 text-[10px] uppercase tracking-wide',
@@ -435,6 +470,18 @@ export function LeadDetail({
           />
         </div>
       )}
+
+      <ConfirmDialog
+        open={confirmClose}
+        title="Close this lead?"
+        description="The lead will be marked Closed. Messages, photos, voicemails, and consent records stay on this record. A new call or text from this number will start a new lead."
+        confirmLabel="Close Lead"
+        loading={closing}
+        onConfirm={confirmCloseLead}
+        onClose={() => {
+          if (!closing) setConfirmClose(false);
+        }}
+      />
     </div>
   );
 }
@@ -467,5 +514,43 @@ function ConsentRow({ label, value }: { label: string; value: string }) {
       <dt className="text-xs font-medium uppercase tracking-wide text-slate-500">{label}</dt>
       <dd className="mt-0.5 text-sm font-medium text-slate-900">{value}</dd>
     </div>
+  );
+}
+
+function parseOwnerNotice(body: string) {
+  const match = body.match(/^\[to Devin(?: · ([^\]]+))?\]\n?([\s\S]*)$/);
+  return {
+    kind: match?.[1] || 'notice',
+    text: match?.[2] || body,
+  };
+}
+
+function ownerKindLabel(kind: string) {
+  if (kind === 'summary') return 'Intake summary';
+  if (kind === 'follow-up') return 'Follow-up forwarded';
+  if (kind === 'repeat-call') return 'Repeat-call notice';
+  return 'Sent to Devin';
+}
+
+function LinkedText({ text, className }: { text: string; className?: string }) {
+  const parts = text.split(/(https?:\/\/[^\s]+)/g);
+  return (
+    <p className={cn('whitespace-pre-wrap break-words', className)}>
+      {parts.map((part, index) =>
+        part.startsWith('http') ? (
+          <a
+            key={`${part}-${index}`}
+            href={part}
+            target="_blank"
+            rel="noreferrer"
+            className="break-all underline decoration-slate-400 underline-offset-2"
+          >
+            {part}
+          </a>
+        ) : (
+          <span key={index}>{part}</span>
+        )
+      )}
+    </p>
   );
 }

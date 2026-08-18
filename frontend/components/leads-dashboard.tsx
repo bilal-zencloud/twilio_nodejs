@@ -15,6 +15,7 @@ import {
 } from 'lucide-react';
 import { StatusBadge } from '@/components/status-badge';
 import { StatCard } from '@/components/stat-card';
+import { ConfirmDialog } from '@/components/confirm-dialog';
 import { closeLead } from '@/lib/api';
 import { cn, formatDate, formatPhone, truncate } from '@/lib/utils';
 import type { Lead, LeadPagination, LeadStats, LeadStatus } from '@/lib/types';
@@ -53,6 +54,8 @@ export function LeadsDashboard({
     (pagination.status as (typeof FILTERS)[number]['id']) || 'all'
   );
   const [closingId, setClosingId] = useState<number | null>(null);
+  const [pendingCloseId, setPendingCloseId] = useState<number | null>(null);
+  const [closeError, setCloseError] = useState<string | null>(null);
 
   const start = pagination.total === 0 ? 0 : (pagination.page - 1) * pagination.limit + 1;
   const end = Math.min(pagination.page * pagination.limit, pagination.total);
@@ -100,16 +103,20 @@ export function LeadsDashboard({
     router.push(buildHref({ page: 1, status: nextFilter }));
   }
 
-  async function handleCloseLead(leadId: number) {
-    if (!window.confirm('Close this lead? Messages, photos, and voicemails will be kept.')) {
-      return;
-    }
-    setClosingId(leadId);
+  function handleCloseLead(leadId: number) {
+    setCloseError(null);
+    setPendingCloseId(leadId);
+  }
+
+  async function confirmCloseLead() {
+    if (pendingCloseId == null) return;
+    setClosingId(pendingCloseId);
     try {
-      await closeLead(leadId);
+      await closeLead(pendingCloseId);
+      setPendingCloseId(null);
       router.refresh();
     } catch (err) {
-      window.alert(err instanceof Error ? err.message : 'Could not close lead');
+      setCloseError(err instanceof Error ? err.message : 'Could not close lead');
     } finally {
       setClosingId(null);
     }
@@ -123,8 +130,15 @@ export function LeadsDashboard({
             {stats.humanFollowUp} lead{stats.humanFollowUp === 1 ? '' : 's'} in Human Follow-Up
           </p>
           <p className="mt-1 text-sm text-indigo-800/80">
-            Devin has the SMS summary. Close a lead from its detail page when the job is done.
+            Open a lead to read the exact SMS summary sent to Devin. Close it from the list or the
+            lead page when the job is done.
           </p>
+        </div>
+      )}
+
+      {closeError && (
+        <div className="rounded-2xl border border-red-200 bg-red-50 px-5 py-4 text-sm text-red-800">
+          {closeError}
         </div>
       )}
 
@@ -299,6 +313,18 @@ export function LeadsDashboard({
       </div>
 
       <p className="text-center text-xs text-slate-400">Account: {accountId}</p>
+
+      <ConfirmDialog
+        open={pendingCloseId != null}
+        title="Close this lead?"
+        description="The lead will be marked Closed. Messages, photos, voicemails, and consent records stay on this record. A new call or text from this number will start a new lead."
+        confirmLabel="Close Lead"
+        loading={closingId != null}
+        onConfirm={confirmCloseLead}
+        onClose={() => {
+          if (closingId == null) setPendingCloseId(null);
+        }}
+      />
     </div>
   );
 }
