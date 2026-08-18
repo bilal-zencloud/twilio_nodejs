@@ -70,19 +70,18 @@ function appendVoicemailTwiML(response) {
   response.hangup();
 }
 
-/** Start voicemail + fire opt-in SMS for new inquiries while the caller listens. */
+/** Start voicemail immediately, then send opt-in SMS without blocking TwiML.
+ * Twilio drops the call if we wait on SMS before returning Play/Record.
+ */
 async function startVoicemailAndOptIn({ response, res, from, to, callSid, logPrefix }) {
   markPendingOptIn(callSid);
-
-  try {
-    await processMissedCall({ from, to, callSid, sendSms: true });
-  } catch (err) {
-    console.error(`${logPrefix} Opt-in SMS error:`, err.message);
-  }
-
   appendVoicemailTwiML(response);
   res.type('text/xml');
   res.send(response.toString());
+
+  processMissedCall({ from, to, callSid, sendSms: true }).catch((err) => {
+    console.error(`${logPrefix} Opt-in SMS error:`, err.message);
+  });
 }
 
 function touchIncomingCall({ from, to, callSid }) {
@@ -143,10 +142,27 @@ const WebhookController = {
   async handleIncomingCall(req, res) {
     const response = new VoiceResponse();
     const ownerPhone = config.twilio.ownerPhoneNumber;
-    const { From, To, CallSid } = req.body;
+    const { From, To, CallSid, ForwardedFrom } = req.body;
 
-    console.log(`[voice/incoming] From=${From} To=${To} CallSid=${CallSid} owner=${ownerPhone || 'none'}`);
+    console.log(
+      `[voice/incoming] From=${From} To=${To} CallSid=${CallSid} owner=${ownerPhone || 'none'} ForwardedFrom=${ForwardedFrom || 'none'}`
+    );
     touchIncomingCall({ from: From, to: To, callSid: CallSid });
+
+    // Call was already unanswered on Devin's AT&T line and forwarded here.
+    // Dialing him again loops the call and cuts the caller off.
+    if (ownerPhone && ForwardedFrom) {
+      console.log('[voice/incoming] Carrier-forwarded missed call — playing greeting (no Dial)');
+      await startVoicemailAndOptIn({
+        response,
+        res,
+        from: From,
+        to: To,
+        callSid: CallSid,
+        logPrefix: '[voice/incoming]',
+      });
+      return;
+    }
 
     // Calling from Devin's own cell cannot ring that same phone — AT&T voicemail
     // answers and the caller sits in silence. Play our greeting instead.
@@ -243,14 +259,19 @@ const WebhookController = {
 
     if (!isMachineAnswer(AnsweredBy)) return;
 
-    const inboundSid = ParentCallSid || CallSid;
+    const inboundSid = ParentCallSid || null;
     if (inboundSid) machineAnswerByCallSid.add(inboundSid);
 
+    // Never hang up the inbound caller — only the outbound leg to Devin's cell.
+    const ownerLegSid = ParentCallSid && CallSid && CallSid !== ParentCallSid ? CallSid : null;
+    if (!ownerLegSid) {
+      console.log('[voice/amd] Skipping hangup — no separate owner call leg');
+      return;
+    }
+
     try {
-      if (CallSid) {
-        await getTwilioClient().calls(CallSid).update({ status: 'completed' });
-        console.log(`[voice/amd] Hung up carrier-voicemail leg ${CallSid}`);
-      }
+      await getTwilioClient().calls(ownerLegSid).update({ status: 'completed' });
+      console.log(`[voice/amd] Hung up carrier-voicemail leg ${ownerLegSid}`);
     } catch (err) {
       console.error('[voice/amd] Failed to drop owner leg:', err.message);
     }
@@ -272,6 +293,12 @@ const WebhookController = {
     console.log(
       `[voice/voicemail-complete] From=${From} To=${To} CallSid=${CallSid} RecordingDuration=${RecordingDuration}`
     );
+
+    const response = new VoiceResponse();
+    response.say({ voice: 'Polly.Joanna' }, consentCopy.VOICEMAIL_THANKS);
+    response.hangup();
+    res.type('text/xml');
+    res.send(response.toString());
 
     let missed = null;
     try {
@@ -306,12 +333,6 @@ const WebhookController = {
         console.error('[voice/voicemail-complete] Voicemail save/notify error:', err.message);
       }
     }
-
-    const response = new VoiceResponse();
-    response.say({ voice: 'Polly.Joanna' }, consentCopy.VOICEMAIL_THANKS);
-    response.hangup();
-    res.type('text/xml');
-    res.send(response.toString());
   },
 
   async handleCallStatus(req, res) {
