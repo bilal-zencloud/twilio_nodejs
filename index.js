@@ -3,12 +3,25 @@
  */
 const app = require('./src/app');
 const config = require('./config/env');
+const { closeInactiveFollowUps } = require('./src/services/handoff.service');
+
+const INACTIVITY_CHECK_MS = 60 * 60 * 1000;
+
+function runInactivitySweep() {
+  try {
+    closeInactiveFollowUps();
+  } catch (err) {
+    console.error('[inactivity] Sweep failed:', err.message);
+  }
+}
 
 const server = app.listen(config.port, () => {
   console.log(`Missed Call Capture running on http://localhost:${config.port} (pid ${process.pid})`);
   console.log(`Dashboard:  ${config.frontendUrl}`);
   console.log(`API:        http://localhost:${config.port}/api`);
   console.log(`Health:     http://localhost:${config.port}/health`);
+  runInactivitySweep();
+  setInterval(runInactivitySweep, INACTIVITY_CHECK_MS).unref();
 });
 
 server.on('error', (err) => {

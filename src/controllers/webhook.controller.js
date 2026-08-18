@@ -17,6 +17,8 @@ const consentService = require('../services/consent.service');
 const aiService = require('../services/ai.service');
 const smsService = require('../services/sms.service');
 const photoService = require('../services/photo.service');
+const voicemailService = require('../services/voicemail.service');
+const handoffService = require('../services/handoff.service');
 const consentCopy = require('../../config/consent');
 
 const MISSED_STATUSES = new Set(['no-answer', 'busy', 'failed', 'canceled']);
@@ -25,13 +27,8 @@ const { STATUSES } = LeadRepository;
 
 const GREETING_AUDIO_FILE = path.join(__dirname, '../../assets/audio/voicemail-greeting.mp3');
 
-/**
- * Owner-recorded greeting + voicemail Record.
- * Opt-in SMS is sent when this flow starts (while the caller is still listening).
- */
 function appendVoicemailTwiML(response) {
   if (fs.existsSync(GREETING_AUDIO_FILE)) {
-    // Absolute URL so Twilio can fetch the file after Railway domain changes.
     const audioUrl = `${config.appUrl.replace(/\/$/, '')}${consentCopy.VOICEMAIL_GREETING_AUDIO_PATH}`;
     response.play(audioUrl);
   } else {
@@ -51,38 +48,44 @@ function appendVoicemailTwiML(response) {
   response.hangup();
 }
 
-/** Start voicemail + fire opt-in SMS immediately (lands during the ~24s recording). */
+/** Start voicemail + fire opt-in SMS for new inquiries while the caller listens. */
 async function startVoicemailAndOptIn({ response, res, from, to, callSid, logPrefix }) {
   markPendingOptIn(callSid);
-  appendVoicemailTwiML(response);
-  res.type('text/xml');
-  res.send(response.toString());
 
   try {
     await processMissedCall({ from, to, callSid, sendSms: true });
   } catch (err) {
     console.error(`${logPrefix} Opt-in SMS error:`, err.message);
   }
+
+  appendVoicemailTwiML(response);
+  res.type('text/xml');
+  res.send(response.toString());
 }
 
-/** Build lead update payload from AI extraction + current lead state. */
+function touchIncomingCall({ from, to, callSid }) {
+  const account = resolveAccount(to);
+  if (!account || !from) return null;
+
+  const { leads } = forAccount(account.id);
+  const existing = leads.findOpenByPhone(from);
+  if (!existing) return null;
+
+  leads.touchActivity(existing.id);
+  return existing;
+}
+
 function buildLeadUpdates(lead, result) {
   const updates = {};
 
   if (result.extracted_name) updates.name = result.extracted_name;
   if (result.extracted_email) updates.email = result.extracted_email;
+  if (result.extracted_vehicle) updates.vehicle = result.extracted_vehicle;
   if (result.extracted_need) updates.need_summary = result.extracted_need;
   if (result.extracted_preferred_time) updates.preferred_time = result.extracted_preferred_time;
   if (result.extracted_location) updates.location = result.extracted_location;
 
-  const name = updates.name || lead.name;
-  const need = updates.need_summary || lead.need_summary;
-  const time = updates.preferred_time || lead.preferred_time;
-  const location = updates.location || lead.location;
-
-  if (time && location && name && need) {
-    updates.status = STATUSES.PENDING_CONFIRMATION;
-  } else if (
+  if (
     lead.status === STATUSES.NEW ||
     lead.status === STATUSES.CONTACTED ||
     lead.status === STATUSES.QUALIFYING ||
@@ -92,6 +95,21 @@ function buildLeadUpdates(lead, result) {
   }
 
   return updates;
+}
+
+function isIntakeComplete(lead, updates, photoCount, result) {
+  if (LeadRepository.isAiPaused(lead.status)) return false;
+
+  const merged = { ...lead, ...updates };
+  const hasCore = Boolean(
+    merged.name &&
+      merged.vehicle &&
+      merged.need_summary &&
+      merged.preferred_time &&
+      merged.location
+  );
+  const photosOk = photoCount > 0 || result.photos_declined === true;
+  return hasCore && photosOk && (result.intake_complete === true || hasCore);
 }
 
 const WebhookController = {
@@ -106,6 +124,7 @@ const WebhookController = {
     const { From, To, CallSid } = req.body;
 
     console.log(`[voice/incoming] From=${From} To=${To} CallSid=${CallSid} owner=${ownerPhone || 'none'}`);
+    touchIncomingCall({ from: From, to: To, callSid: CallSid });
 
     if (ownerPhone) {
       const dial = response.dial({
@@ -162,53 +181,77 @@ const WebhookController = {
 
   /**
    * After Record completes — thank caller and hang up.
-   * Opt-in SMS should already have been sent when the greeting started; this is a backup only.
+   * New inquiries get opt-in (backup). Repeat calls notify Devin with the recording.
    */
   async handleVoicemailComplete(req, res) {
-    const { From, To, CallSid, RecordingDuration } = req.body;
+    const {
+      From,
+      To,
+      CallSid,
+      RecordingDuration,
+      RecordingUrl,
+      RecordingSid,
+    } = req.body;
     console.log(
       `[voice/voicemail-complete] From=${From} To=${To} CallSid=${CallSid} RecordingDuration=${RecordingDuration}`
     );
+
+    let missed = null;
+    try {
+      missed = await processMissedCall({ from: From, to: To, callSid: CallSid, sendSms: true });
+    } catch (err) {
+      console.error('[voice/voicemail-complete] Opt-in backup error:', err.message);
+    }
+
+    if (missed?.lead && RecordingUrl) {
+      try {
+        const { voicemails, leads } = forAccount(missed.accountId);
+        const saved = await voicemailService.saveVoicemail({
+          accountId: missed.accountId,
+          leadId: missed.lead.id,
+          recordingUrl: RecordingUrl,
+          recordingSid: RecordingSid,
+          callSid: CallSid,
+          duration: RecordingDuration,
+          voicemails,
+        });
+
+        leads.touchActivity(missed.lead.id);
+
+        if (missed.isRepeat) {
+          await handoffService.notifyRepeatCall({
+            accountId: missed.accountId,
+            lead: missed.lead,
+            voicemail: saved,
+          });
+        }
+      } catch (err) {
+        console.error('[voice/voicemail-complete] Voicemail save/notify error:', err.message);
+      }
+    }
 
     const response = new VoiceResponse();
     response.say({ voice: 'Polly.Joanna' }, consentCopy.VOICEMAIL_THANKS);
     response.hangup();
     res.type('text/xml');
     res.send(response.toString());
-
-    if (hasPendingOptIn(CallSid)) {
-      try {
-        await processMissedCall({ from: From, to: To, callSid: CallSid, sendSms: true });
-      } catch (err) {
-        console.error('[voice/voicemail-complete] Opt-in backup error:', err.message);
-      }
-    }
   },
 
   async handleCallStatus(req, res) {
     const { CallStatus, From, CallSid, To } = req.body;
-    res.sendStatus(200);
-
     console.log(`[voice/status] CallStatus=${CallStatus} From=${From} CallSid=${CallSid}`);
 
-    // Backup if caller hung up before opt-in SMS was sent.
-    if (CallStatus === 'completed' && hasPendingOptIn(CallSid)) {
-      try {
-        await processMissedCall({ from: From, to: To, callSid: CallSid, sendSms: true });
-      } catch (err) {
-        console.error('[voice/status] Opt-in backup error:', err.message);
-      }
-      return;
-    }
-
-    if (config.twilio.ownerPhoneNumber) return;
-    if (!MISSED_STATUSES.has(CallStatus)) return;
-
     try {
-      await processMissedCall({ from: From, to: To, callSid: CallSid, sendSms: true });
+      if (CallStatus === 'completed' && hasPendingOptIn(CallSid)) {
+        await processMissedCall({ from: From, to: To, callSid: CallSid, sendSms: true });
+      } else if (!config.twilio.ownerPhoneNumber && MISSED_STATUSES.has(CallStatus)) {
+        await processMissedCall({ from: From, to: To, callSid: CallSid, sendSms: true });
+      }
     } catch (err) {
       console.error('[voice/status] Error:', err.message);
     }
+
+    res.sendStatus(200);
   },
 
   async handleInboundSms(req, res) {
@@ -228,14 +271,16 @@ const WebhookController = {
 
       const { leads, messages, photos } = forAccount(account.id);
 
-      let lead = leads.findByPhone(From);
+      let lead = leads.findOpenByPhone(From);
       if (!lead) {
-        // Cold inbound SMS: still require YES before any qualifying AI.
+        // New inquiry (including after a closed lead) — consent gate before AI.
         lead = leads.create({ callerPhone: From });
         leads.update(lead.id, { status: STATUSES.AWAITING_CONSENT });
       }
 
-      // Store inbound MMS photos (S3) before further processing
+      leads.touchActivity(lead.id);
+
+      const savedPhotos = [];
       for (const media of mediaItems) {
         try {
           const saved = await photoService.saveLeadPhoto({
@@ -245,12 +290,13 @@ const WebhookController = {
             mimeType: media.contentType,
           });
 
-          photos.create({
+          const row = photos.create({
             leadId: lead.id,
             filePath: saved.storageKey,
             mimeType: saved.mimeType,
             storage: saved.storage,
           });
+          savedPhotos.push(row);
 
           console.log(`[sms/inbound] Photo saved to S3 for lead #${lead.id}: ${saved.storageKey}`);
         } catch (photoErr) {
@@ -270,21 +316,26 @@ const WebhookController = {
 
       const keyword = consentService.classifyConsentReply(messageBody);
 
-      // Carrier STOP — Twilio Advanced Opt-Out sends the phone SMS; we log it for chat parity
       if (keyword === 'stop') {
         consentService.handleStopOptOut({ lead, leads, messages });
+        if (LeadRepository.isAiPaused(lead.status) || lead.status === STATUSES.QUALIFYING) {
+          await handoffService.forwardToOwner({
+            accountId: account.id,
+            lead,
+            messageBody: inboundLogBody,
+            photos: savedPhotos,
+          });
+        }
         res.type('text/xml');
         return res.send(twiml.toString());
       }
 
-      // START re-opens the consent gate (YES still required before AI qualify)
-      if (keyword === 'start') {
+      if (keyword === 'start' && lead.status === STATUSES.OPTED_OUT) {
         consentService.handleStartResubscribe({ lead, leads, messages });
         res.type('text/xml');
         return res.send(twiml.toString());
       }
 
-      // After STOP: YES re-opens consent + qualifies; HELP sends compliance text; else silent
       if (lead.status === STATUSES.OPTED_OUT) {
         if (keyword === 'yes') {
           lead = leads.update(lead.id, { status: STATUSES.AWAITING_CONSENT });
@@ -308,7 +359,6 @@ const WebhookController = {
         return res.send(twiml.toString());
       }
 
-      // Consent gate — wait for YES before any AI conversation
       if (
         lead.status === STATUSES.AWAITING_CONSENT ||
         lead.status === STATUSES.NEW ||
@@ -326,9 +376,33 @@ const WebhookController = {
         return res.send(twiml.toString());
       }
 
-      // Skip AI reply for already confirmed/closed leads — still store photos/messages
-      if (lead.status === STATUSES.CONFIRMED || lead.status === STATUSES.CLOSED) {
-        console.log(`[sms/inbound] Lead #${lead.id} is ${lead.status} — message logged only`);
+      if (keyword === 'help') {
+        await smsService.sendSmsAndConfirm(From, consentCopy.HELP_SMS);
+        messages.create({
+          leadId: lead.id,
+          direction: MessageRepository.DIRECTIONS.OUTBOUND,
+          body: consentCopy.HELP_SMS,
+        });
+        if (LeadRepository.isAiPaused(lead.status)) {
+          await handoffService.forwardToOwner({
+            accountId: account.id,
+            lead,
+            messageBody: inboundLogBody,
+            photos: savedPhotos,
+          });
+        }
+        res.type('text/xml');
+        return res.send(twiml.toString());
+      }
+
+      if (LeadRepository.isAiPaused(lead.status)) {
+        await handoffService.forwardToOwner({
+          accountId: account.id,
+          lead,
+          messageBody: inboundLogBody,
+          photos: savedPhotos.length ? savedPhotos : photos.findByLead(lead.id).slice(-5),
+        });
+        console.log(`[sms/inbound] Lead #${lead.id} is ${lead.status} — forwarded to owner, AI paused`);
         res.type('text/xml');
         return res.send(twiml.toString());
       }
@@ -346,6 +420,18 @@ const WebhookController = {
 
       const updates = buildLeadUpdates(lead, result);
       leads.update(lead.id, updates);
+      lead = leads.findById(lead.id);
+      leads.touchActivity(lead.id);
+
+      if (isIntakeComplete(lead, updates, photoCount, result)) {
+        await handoffService.completeIntake({
+          accountId: account.id,
+          lead,
+          lastMessage: inboundLogBody,
+        });
+        res.type('text/xml');
+        return res.send(twiml.toString());
+      }
 
       const replyText = result.reply_sms || 'Thanks! We will be in touch shortly.';
       await smsService.sendSmsAndConfirm(From, replyText);

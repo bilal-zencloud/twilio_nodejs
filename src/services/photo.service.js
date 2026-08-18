@@ -88,8 +88,26 @@ function parseInboundMedia(body) {
   return items;
 }
 
+async function getSignedPhotoUrl(photo) {
+  if (photo?.storage === 's3' && photo.file_path) {
+    return s3.getSignedDownloadUrl(photo.file_path);
+  }
+  return null;
+}
+
+async function getSignedPhotoUrls(photos, { limit = 5 } = {}) {
+  const urls = [];
+  for (const photo of photos.slice(0, limit)) {
+    const url = await getSignedPhotoUrl(photo);
+    if (url) urls.push(url);
+  }
+  return urls;
+}
+
 module.exports = {
   saveLeadPhoto,
   getPhotoObject,
   parseInboundMedia,
+  getSignedPhotoUrl,
+  getSignedPhotoUrls,
 };

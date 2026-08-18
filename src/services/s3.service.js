@@ -7,6 +7,7 @@ const {
   GetObjectCommand,
   DeleteObjectCommand,
 } = require('@aws-sdk/client-s3');
+const { getSignedUrl } = require('@aws-sdk/s3-request-presigner');
 const config = require('../../config/env');
 
 let client = null;
@@ -64,4 +65,13 @@ async function deleteObject(key) {
   );
 }
 
-module.exports = { uploadObject, getObject, deleteObject };
+/** Time-limited HTTPS URL so Twilio/MMS and Devin's phone can fetch private objects. */
+async function getSignedDownloadUrl(key, expiresIn = 7 * 24 * 60 * 60) {
+  return getSignedUrl(
+    getClient(),
+    new GetObjectCommand({ Bucket: requireBucket(), Key: key }),
+    { expiresIn }
+  );
+}
+
+module.exports = { uploadObject, getObject, deleteObject, getSignedDownloadUrl };

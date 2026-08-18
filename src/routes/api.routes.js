@@ -17,6 +17,8 @@ router.use('/auth', authRoutes);
 router.get('/leads', requireAuth, ApiController.listLeads);
 router.get('/leads/:id', requireAuth, ApiController.getLead);
 router.post('/leads/:id/confirm', requireAuth, ApiController.confirmLead);
+router.post('/leads/:id/close', requireAuth, ApiController.closeLead);
 router.get('/leads/:id/photos/:photoId', requireAuth, ApiController.photo);
+router.get('/leads/:id/voicemails/:voicemailId', requireAuth, ApiController.voicemail);
 
 module.exports = router;

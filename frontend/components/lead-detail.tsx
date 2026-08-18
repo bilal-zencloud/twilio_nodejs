@@ -17,14 +17,15 @@ import {
   ZoomIn,
 } from 'lucide-react';
 import { StatusBadge } from '@/components/status-badge';
-import { confirmLead } from '@/lib/api';
+import { confirmLead, closeLead } from '@/lib/api';
 import { cn, formatConsentDate, formatConsentTime, formatDate, formatPhone } from '@/lib/utils';
-import type { AppointmentType, Lead, Message, Photo } from '@/lib/types';
+import type { AppointmentType, Lead, Message, Photo, Voicemail } from '@/lib/types';
 
 interface LeadDetailProps {
   initialLead: Lead;
   messages: Message[];
   photos: Photo[];
+  voicemails: Voicemail[];
   accountId: string;
   appointmentTypes: Record<string, AppointmentType>;
 }
@@ -33,6 +34,7 @@ export function LeadDetail({
   initialLead,
   messages,
   photos,
+  voicemails,
   accountId,
   appointmentTypes,
 }: LeadDetailProps) {
@@ -44,9 +46,11 @@ export function LeadDetail({
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
+  const [closedNotice, setClosedNotice] = useState(false);
   const [lightbox, setLightbox] = useState<string | null>(null);
 
   const canConfirm = lead.status === 'pending_confirmation';
+  const canClose = lead.status !== 'closed';
 
   async function handleConfirm(e: React.FormEvent) {
     e.preventDefault();
@@ -68,6 +72,23 @@ export function LeadDetail({
     }
   }
 
+  async function handleClose() {
+    if (!window.confirm('Close this lead? Messages, photos, and voicemails will be kept.')) {
+      return;
+    }
+    setClosing(true);
+    setError(null);
+    try {
+      const result = await closeLead(lead.id);
+      setLead(result.lead);
+      setClosedNotice(true);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not close lead');
+    } finally {
+      setClosing(false);
+    }
+  }
+
   return (
     <div className="space-y-6">
       <Link
@@ -77,6 +98,19 @@ export function LeadDetail({
         <ArrowLeft className="h-4 w-4" />
         Back to leads
       </Link>
+
+      {closedNotice && (
+        <div className="flex items-start gap-3 rounded-2xl border border-slate-200 bg-slate-50 px-5 py-4">
+          <CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0 text-slate-600" />
+          <div>
+            <p className="font-semibold text-slate-900">Lead closed</p>
+            <p className="mt-1 text-sm text-slate-600">
+              Messages, photos, voicemails, and consent records were kept. A new contact from this
+              number will start a new lead.
+            </p>
+          </div>
+        </div>
+      )}
 
       {success && (
         <div className="flex items-start gap-3 rounded-2xl border border-teal-200 bg-teal-50 px-5 py-4">
@@ -113,6 +147,7 @@ export function LeadDetail({
               <InfoRow icon={Phone} label="Phone" value={formatPhone(lead.caller_phone)} />
               <InfoRow icon={Mail} label="Email" value={lead.email || '—'} />
               <InfoRow icon={Wrench} label="Need" value={lead.need_summary || '—'} className="sm:col-span-2" />
+              <InfoRow icon={Wrench} label="Vehicle" value={lead.vehicle || '—'} className="sm:col-span-2" />
               <InfoRow icon={Clock} label="Preferred time" value={lead.preferred_time || '—'} />
               <InfoRow icon={MapPin} label="Location" value={lead.location || '—'} />
               {lead.appointment_type && (
@@ -130,6 +165,7 @@ export function LeadDetail({
 
             <p className="mt-4 text-xs text-slate-400">
               Created {formatDate(lead.created_at)} · Updated {formatDate(lead.updated_at)}
+              {lead.last_activity_at ? ` · Last Twilio activity ${formatDate(lead.last_activity_at)}` : ''}
             </p>
           </div>
 
@@ -164,6 +200,27 @@ export function LeadDetail({
             </div>
           )}
 
+          {voicemails.length > 0 && (
+            <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+              <h2 className="text-lg font-semibold text-slate-900">
+                Voicemails ({voicemails.length})
+              </h2>
+              <div className="mt-4 space-y-4">
+                {voicemails.map((vm, index) => (
+                  <div key={vm.id} className="rounded-xl border border-slate-100 bg-slate-50 p-4">
+                    <p className="text-sm font-medium text-slate-800">
+                      Recording {index + 1}
+                      {vm.duration != null ? ` · ${vm.duration}s` : ''}
+                    </p>
+                    <p className="mt-1 text-xs text-slate-500">{formatDate(vm.created_at)}</p>
+                    <audio controls src={vm.url} className="mt-3 w-full" preload="none">
+                      Your browser does not support audio playback.
+                    </audio>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
           {photos.length > 0 && (
             <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
               <h2 className="text-lg font-semibold text-slate-900">
@@ -298,14 +355,45 @@ export function LeadDetail({
                 )}
               </button>
             </form>
-          ) : (
+          ) : null}
+
+          {!canConfirm && (
             <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
               <h2 className="text-lg font-semibold text-slate-900">Status</h2>
               <p className="mt-2 text-sm text-slate-600">
-                {lead.status === 'confirmed'
-                  ? 'This lead has been confirmed and the customer was notified.'
-                  : 'This lead is not ready for confirmation yet. Waiting for scheduling details from the customer.'}
+                {lead.status === 'human_follow_up'
+                  ? 'Intake is complete. Devin has the summary by SMS and will contact the customer from his AT&T number. The assistant will not send more qualifying questions.'
+                  : lead.status === 'closed'
+                    ? 'This lead is closed. A new call or text from this number will start a new lead.'
+                    : lead.status === 'confirmed'
+                      ? 'This lead has been confirmed and the customer was notified.'
+                      : 'This lead is still in intake. The assistant will keep collecting details after the customer replies YES.'}
               </p>
+            </div>
+          )}
+
+          {canClose && (
+            <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+              <h2 className="text-lg font-semibold text-slate-900">Close lead</h2>
+              <p className="mt-2 text-sm text-slate-600">
+                Marks this inquiry completed. History, photos, voicemails, and consent records stay
+                on this record.
+              </p>
+              <button
+                type="button"
+                onClick={handleClose}
+                disabled={closing}
+                className="mt-4 flex w-full items-center justify-center gap-2 rounded-xl border border-slate-300 bg-white px-4 py-3 text-sm font-semibold text-slate-800 transition hover:bg-slate-50 disabled:opacity-60"
+              >
+                {closing ? (
+                  <>
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    Closing…
+                  </>
+                ) : (
+                  'Close Lead'
+                )}
+              </button>
             </div>
           )}
         </div>

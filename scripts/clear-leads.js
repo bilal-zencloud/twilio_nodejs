@@ -14,11 +14,13 @@ const before = {
   leads: db.prepare('SELECT COUNT(*) AS c FROM leads').get().c,
   messages: db.prepare('SELECT COUNT(*) AS c FROM messages').get().c,
   photos: db.prepare('SELECT COUNT(*) AS c FROM lead_photos').get().c,
+  voicemails: db.prepare('SELECT COUNT(*) AS c FROM lead_voicemails').get().c,
 };
 
 const tx = db.transaction(() => {
   db.exec('DELETE FROM messages');
   db.exec('DELETE FROM lead_photos');
+  db.exec('DELETE FROM lead_voicemails');
   db.exec('DELETE FROM leads');
 });
 tx();
@@ -36,10 +38,12 @@ const after = {
   leads: db.prepare('SELECT COUNT(*) AS c FROM leads').get().c,
   messages: db.prepare('SELECT COUNT(*) AS c FROM messages').get().c,
   photos: db.prepare('SELECT COUNT(*) AS c FROM lead_photos').get().c,
+  voicemails: db.prepare('SELECT COUNT(*) AS c FROM lead_voicemails').get().c,
 };
 
 console.log('Cleared lead data:');
 console.log(`  leads:    ${before.leads} → ${after.leads}`);
 console.log(`  messages: ${before.messages} → ${after.messages}`);
 console.log(`  photos:   ${before.photos} → ${after.photos}`);
+console.log(`  voicemails: ${before.voicemails} → ${after.voicemails}`);
 console.log(`Account name set to: ${business.name}`);

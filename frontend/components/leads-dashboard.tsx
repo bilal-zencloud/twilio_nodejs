@@ -21,13 +21,14 @@ import type { Lead, LeadPagination, LeadStats, LeadStatus } from '@/lib/types';
 const FILTERS: { id: 'all' | LeadStatus | 'action'; label: string }[] = [
   { id: 'all', label: 'All leads' },
   { id: 'action', label: 'Needs action' },
+  { id: 'human_follow_up', label: 'Human Follow-Up' },
   { id: 'pending_confirmation', label: 'Pending' },
   { id: 'awaiting_consent', label: 'Awaiting consent' },
   { id: 'contacted', label: 'Contacted' },
   { id: 'qualifying', label: 'Qualifying' },
   { id: 'confirmed', label: 'Confirmed' },
-  { id: 'opted_out', label: 'Opted out' },
   { id: 'closed', label: 'Closed' },
+  { id: 'opted_out', label: 'Opted out' },
 ];
 
 interface LeadsDashboardProps {
@@ -99,13 +100,13 @@ export function LeadsDashboard({
 
   return (
     <div className="space-y-8">
-      {stats.pending > 0 && (
-        <div className="rounded-2xl border border-amber-200 bg-gradient-to-r from-amber-50 to-orange-50 px-5 py-4">
-          <p className="text-sm font-semibold text-amber-900">
-            {stats.pending} lead{stats.pending === 1 ? '' : 's'} ready to confirm
+      {(stats.humanFollowUp || 0) > 0 && (
+        <div className="rounded-2xl border border-indigo-200 bg-gradient-to-r from-indigo-50 to-sky-50 px-5 py-4">
+          <p className="text-sm font-semibold text-indigo-900">
+            {stats.humanFollowUp} lead{stats.humanFollowUp === 1 ? '' : 's'} in Human Follow-Up
           </p>
-          <p className="mt-1 text-sm text-amber-800/80">
-            Review scheduling details and photos, then confirm inspection or repair visits.
+          <p className="mt-1 text-sm text-indigo-800/80">
+            Devin has the SMS summary. Close a lead from its detail page when the job is done.
           </p>
         </div>
       )}
@@ -113,11 +114,11 @@ export function LeadsDashboard({
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <StatCard label="Total leads" value={stats.total} icon={Users} accent="slate" />
         <StatCard
-          label="Pending confirmation"
-          value={stats.pending}
+          label="Human Follow-Up"
+          value={stats.humanFollowUp || 0}
           icon={Clock}
           accent="amber"
-          highlight={stats.pending > 0}
+          highlight={(stats.humanFollowUp || 0) > 0}
         />
         <StatCard label="Confirmed" value={stats.confirmed} icon={CheckCircle2} accent="teal" />
         <StatCard label="In progress" value={stats.active} icon={Activity} accent="sky" />
@@ -175,6 +176,7 @@ export function LeadsDashboard({
                   <th className="px-5 py-3 font-semibold">When</th>
                   <th className="px-5 py-3 font-semibold">Location</th>
                   <th className="px-5 py-3 font-semibold">Created</th>
+                  <th className="px-5 py-3 font-semibold">Last activity</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
@@ -183,6 +185,7 @@ export function LeadsDashboard({
                     key={lead.id}
                     className={cn(
                       'group transition hover:bg-slate-50/80',
+                      lead.status === 'human_follow_up' && 'bg-indigo-50/40',
                       lead.status === 'pending_confirmation' && 'bg-amber-50/40'
                     )}
                   >
@@ -200,7 +203,10 @@ export function LeadsDashboard({
                     <td className="px-5 py-4">
                       <StatusBadge
                         status={lead.status}
-                        pulse={lead.status === 'pending_confirmation'}
+                        pulse={
+                          lead.status === 'pending_confirmation' ||
+                          lead.status === 'human_follow_up'
+                        }
                       />
                     </td>
                     <td className="max-w-[180px] px-5 py-4 text-slate-600">
@@ -213,6 +219,9 @@ export function LeadsDashboard({
                       {lead.location ? truncate(lead.location, 32) : '—'}
                     </td>
                     <td className="px-5 py-4 text-slate-500">{formatDate(lead.created_at)}</td>
+                    <td className="px-5 py-4 text-slate-500">
+                      {lead.last_activity_at ? formatDate(lead.last_activity_at) : '—'}
+                    </td>
                   </tr>
                 ))}
               </tbody>

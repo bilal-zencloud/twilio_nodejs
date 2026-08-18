@@ -38,6 +38,10 @@ const POST_OPT_IN_SMS =
   "Thank you for confirming. We're happy to help with your paintless dent repair request. " +
   "To get started, could you tell us a little about the dent or hail damage you're looking to have repaired?";
 
+/** Sent to the customer after intake is complete and Devin has been notified. */
+const HANDOFF_SMS =
+  'Thank you. Devin has your information and will contact you shortly from the number you originally called.';
+
 /** Permanent consent proof labels stored on the lead. */
 const CONSENT_STATUS = {
   VERIFIED: 'VERIFIED',
@@ -59,6 +63,7 @@ module.exports = {
   STOP_ACK_SMS,
   START_ACK_SMS,
   POST_OPT_IN_SMS,
+  HANDOFF_SMS,
   CONSENT_STATUS,
   CONSENT_METHOD,
   CONSENT_SOURCE,

@@ -1,6 +1,7 @@
 /**
- * Shared missed-call handler — creates/updates a lead and sends the one-time
- * A2P opt-in SMS. Qualifying conversation starts only after the caller replies YES.
+ * Shared missed-call handler — creates a lead for new inquiries and sends the
+ * one-time A2P opt-in SMS. Repeat calls on an open lead attach to that record
+ * and do not restart intake or re-send opt-in.
  */
 const { forAccount } = require('../repositories');
 const LeadRepository = require('../repositories/LeadRepository');
@@ -9,6 +10,7 @@ const { resolveAccount } = require('./account.service');
 const smsService = require('./sms.service');
 const consentCopy = require('../../config/consent');
 
+/** Dedupes voice + voicemail-complete + status webhooks for the same call. */
 const GREETING_COOLDOWN_MINUTES = 5;
 const processing = new Set();
 
@@ -16,14 +18,6 @@ const processing = new Set();
 const pendingOptInByCallSid = new Set();
 
 const { STATUSES } = LeadRepository;
-
-/** Leads already consented and mid-pipeline — do not re-send opt-in. */
-const CONSENTED_PIPELINE = new Set([
-  STATUSES.QUALIFYING,
-  STATUSES.CAPTURED,
-  STATUSES.PENDING_CONFIRMATION,
-  STATUSES.CONFIRMED,
-]);
 
 function lockKey(accountId, phone) {
   return `${accountId}:${phone}`;
@@ -60,12 +54,26 @@ function hasRecentOptInSms(messages, leadId, withinMinutes = GREETING_COOLDOWN_M
   });
 }
 
+async function sendOptIn({ from, to, callSid, lead, leads, messages }) {
+  console.log(`[missed-call] Sending opt-in SMS to ${from} (To was ${to})`);
+  await smsService.sendSmsAndConfirm(from, consentCopy.OPT_IN_SMS, { waitMs: 0 });
+
+  messages.create({
+    leadId: lead.id,
+    direction: MessageRepository.DIRECTIONS.OUTBOUND,
+    body: consentCopy.OPT_IN_SMS,
+  });
+
+  leads.update(lead.id, { status: STATUSES.AWAITING_CONSENT });
+  leads.touchActivity(lead.id);
+  clearPendingOptIn(callSid);
+  console.log(`[missed-call] Opt-in SMS sent to ${from}`);
+  return leads.findById(lead.id);
+}
+
 /**
- * Create/update the lead and optionally send the A2P opt-in SMS.
- *
- * Opt-in is skipped ONLY when the lead already has sms_opted_in_at and is still
- * in the post-consent pipeline (qualifying → confirmed). Legacy "qualifying"
- * leads without consent still receive the gate.
+ * Create a new lead (or attach to an open one) and optionally send the opt-in SMS.
+ * Closed leads are left untouched — a new inquiry gets a new lead.
  */
 async function processMissedCall({ from, to, callSid, sendSms = true }) {
   if (!from) {
@@ -82,7 +90,6 @@ async function processMissedCall({ from, to, callSid, sendSms = true }) {
   const { leads, messages } = forAccount(account.id);
   const key = lockKey(account.id, from);
 
-  // Wait briefly if another webhook is mid-flight (avoid dropping the SMS send).
   for (let i = 0; i < 20 && processing.has(key); i++) {
     await new Promise((r) => setTimeout(r, 100));
   }
@@ -94,64 +101,65 @@ async function processMissedCall({ from, to, callSid, sendSms = true }) {
   processing.add(key);
 
   try {
-    let lead = leads.findByPhone(from);
-
-    if (lead && CONSENTED_PIPELINE.has(lead.status) && lead.sms_opted_in_at) {
-      leads.update(lead.id, { call_sid: callSid || lead.call_sid });
-      clearPendingOptIn(callSid);
-      console.log(
-        `[missed-call] Lead #${lead.id} already consented (${lead.status}) — skipping opt-in SMS`
-      );
-      return lead;
-    }
+    let lead = leads.findOpenByPhone(from);
 
     if (lead) {
-      leads.update(lead.id, {
-        call_sid: callSid || lead.call_sid,
-        status: STATUSES.AWAITING_CONSENT,
-      });
-      console.log(`[missed-call] Updated existing lead #${lead.id} for ${from}`);
-    } else {
-      lead = leads.create({ callerPhone: from, callSid: callSid || null });
-      leads.update(lead.id, { status: STATUSES.AWAITING_CONSENT });
-      console.log(`[missed-call] Lead #${lead.id} created for ${from}`);
+      const isRepeat =
+        LeadRepository.skipOptInOnRepeat(lead.status) ||
+        Boolean(lead.call_sid && callSid && lead.call_sid !== callSid);
+
+      leads.update(lead.id, { call_sid: callSid || lead.call_sid });
+      leads.touchActivity(lead.id);
+      lead = leads.findById(lead.id);
+
+      if (LeadRepository.skipOptInOnRepeat(lead.status)) {
+        clearPendingOptIn(callSid);
+        console.log(
+          `[missed-call] Repeat call for lead #${lead.id} (${lead.status}) — skipping opt-in SMS`
+        );
+        return { lead, isRepeat: true, accountId: account.id };
+      }
+
+      const alreadySent = hasRecentOptInSms(messages, lead.id);
+      if (!sendSms || alreadySent) {
+        clearPendingOptIn(callSid);
+        if (alreadySent) {
+          console.log(
+            `[missed-call] Opt-in already sent to ${from} within ${GREETING_COOLDOWN_MINUTES}m, skipping SMS`
+          );
+        }
+        return { lead, isRepeat, accountId: account.id };
+      }
+
+      try {
+        lead = await sendOptIn({ from, to, callSid, lead, leads, messages });
+      } catch (err) {
+        leads.update(lead.id, { status: STATUSES.CONTACTED });
+        console.error('[missed-call] SMS error (lead saved):', err.message);
+        throw err;
+      }
+
+      return { lead, isRepeat, accountId: account.id };
     }
 
+    lead = leads.create({ callerPhone: from, callSid: callSid || null });
+    leads.update(lead.id, { status: STATUSES.AWAITING_CONSENT });
+    console.log(`[missed-call] Lead #${lead.id} created for ${from}`);
     lead = leads.findById(lead.id);
 
     if (!sendSms) {
-      return lead;
-    }
-
-    if (hasRecentOptInSms(messages, lead.id)) {
-      clearPendingOptIn(callSid);
-      console.log(
-        `[missed-call] Opt-in already sent to ${from} within ${GREETING_COOLDOWN_MINUTES}m, skipping SMS`
-      );
-      leads.update(lead.id, { status: STATUSES.AWAITING_CONSENT });
-      return leads.findById(lead.id);
+      return { lead, isRepeat: false, accountId: account.id };
     }
 
     try {
-      console.log(`[missed-call] Sending opt-in SMS to ${from} (To was ${to})`);
-      await smsService.sendSmsAndConfirm(from, consentCopy.OPT_IN_SMS, { waitMs: 0 });
-
-      messages.create({
-        leadId: lead.id,
-        direction: MessageRepository.DIRECTIONS.OUTBOUND,
-        body: consentCopy.OPT_IN_SMS,
-      });
-
-      leads.update(lead.id, { status: STATUSES.AWAITING_CONSENT });
-      clearPendingOptIn(callSid);
-      console.log(`[missed-call] Opt-in SMS sent to ${from}`);
+      lead = await sendOptIn({ from, to, callSid, lead, leads, messages });
     } catch (err) {
       leads.update(lead.id, { status: STATUSES.CONTACTED });
       console.error('[missed-call] SMS error (lead saved):', err.message);
       throw err;
     }
 
-    return leads.findById(lead.id);
+    return { lead, isRepeat: false, accountId: account.id };
   } finally {
     processing.delete(key);
   }

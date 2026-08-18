@@ -33,12 +33,16 @@ function formatSmsError(err, to) {
  * Send an SMS from the business Twilio number to the caller.
  * @returns {Promise<{ sid: string, status: string }>}
  */
-async function sendSms(to, body) {
+async function sendSms(to, body, { mediaUrl } = {}) {
   const params = {
     to,
     from: config.twilio.phoneNumber,
     body,
   };
+
+  if (mediaUrl && mediaUrl.length) {
+    params.mediaUrl = mediaUrl;
+  }
 
   if (config.twilio.messagingServiceSid) {
     delete params.from;
@@ -56,8 +60,8 @@ async function sendSms(to, body) {
 /**
  * Poll message status briefly — catches async delivery failures (e.g. A2P 30034).
  */
-async function sendSmsAndConfirm(to, body, { waitMs = 4000 } = {}) {
-  const { sid, status } = await sendSms(to, body);
+async function sendSmsAndConfirm(to, body, { waitMs = 4000, mediaUrl } = {}) {
+  const { sid, status } = await sendSms(to, body, { mediaUrl });
 
   if (waitMs > 0) {
     await new Promise((r) => setTimeout(r, waitMs));
@@ -76,4 +80,24 @@ async function sendSmsAndConfirm(to, body, { waitMs = 4000 } = {}) {
   return { sid, status };
 }
 
-module.exports = { sendSms, sendSmsAndConfirm, ERROR_HINTS };
+/**
+ * Notify Devin on OWNER_PHONE_NUMBER. Falls back to text-only if MMS is rejected.
+ */
+async function sendOwnerMessage(body, { mediaUrl } = {}) {
+  const to = config.twilio.ownerPhoneNumber;
+  if (!to) {
+    throw new Error('OWNER_PHONE_NUMBER is not set — cannot notify Devin');
+  }
+
+  try {
+    return await sendSmsAndConfirm(to, body, { waitMs: 0, mediaUrl });
+  } catch (err) {
+    if (mediaUrl && mediaUrl.length) {
+      console.warn('[sms] Owner MMS failed, retrying text-only:', err.message);
+      return sendSmsAndConfirm(to, body, { waitMs: 0 });
+    }
+    throw err;
+  }
+}
+
+module.exports = { sendSms, sendSmsAndConfirm, sendOwnerMessage, ERROR_HINTS };

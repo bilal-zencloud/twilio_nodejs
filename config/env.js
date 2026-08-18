@@ -44,6 +44,9 @@ const config = {
     defaultAdminPassword: process.env.ADMIN_PASSWORD || 'changeme',
   },
 
+  // Human Follow-Up leads with no Twilio activity auto-close after this many days
+  inactivityCloseDays: parseInt(process.env.LEAD_INACTIVITY_DAYS || '30', 10),
+
   // Public URL of this app (required for Twilio webhook signature validation)
   appUrl: process.env.APP_URL || `http://localhost:${process.env.PORT || 3000}`,
 

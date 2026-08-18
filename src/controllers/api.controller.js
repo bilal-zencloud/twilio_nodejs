@@ -6,10 +6,16 @@
 const { forAccount } = require('../repositories');
 const LeadRepository = require('../repositories/LeadRepository');
 const { confirmLead } = require('../services/confirm.service');
+const { closeLead } = require('../services/handoff.service');
 const photoService = require('../services/photo.service');
+const voicemailService = require('../services/voicemail.service');
 
 function buildPhotoUrl(_req, leadId, photoId) {
   return `/api/leads/${leadId}/photos/${photoId}`;
+}
+
+function buildVoicemailUrl(_req, leadId, voicemailId) {
+  return `/api/leads/${leadId}/voicemails/${voicemailId}`;
 }
 
 const ApiController = {
@@ -49,18 +55,21 @@ const ApiController = {
 
   async getLead(req, res) {
     const accountId = req.accountId;
-    const { leads, messages, photos } = forAccount(accountId);
+    const { leads, messages, photos, voicemails } = forAccount(accountId);
     const lead = leads.findById(req.params.id);
 
     if (!lead) {
       return res.status(404).json({ error: 'Lead not found' });
     }
 
-    // Return authenticated API URLs, not S3 URLs. The photo route checks the
-    // admin session and tenant scope before streaming the object from S3.
     const leadPhotos = photos.findByLead(lead.id).map((p) => ({
       ...p,
       url: buildPhotoUrl(req, lead.id, p.id),
+    }));
+
+    const leadVoicemails = voicemails.findByLead(lead.id).map((v) => ({
+      ...v,
+      url: buildVoicemailUrl(req, lead.id, v.id),
     }));
 
     res.json({
@@ -68,6 +77,7 @@ const ApiController = {
       lead,
       messages: messages.findByLead(lead.id),
       photos: leadPhotos,
+      voicemails: leadVoicemails,
       appointmentTypes: LeadRepository.APPOINTMENT_TYPES,
     });
   },
@@ -88,6 +98,19 @@ const ApiController = {
       res.json({ success: true, lead });
     } catch (err) {
       console.error('[api/confirm] Error:', err.message);
+      res.status(400).json({ error: err.message });
+    }
+  },
+
+  closeLead(req, res) {
+    const accountId = req.accountId;
+    const leadId = parseInt(req.params.id, 10);
+
+    try {
+      const lead = closeLead({ accountId, leadId });
+      res.json({ success: true, lead });
+    } catch (err) {
+      console.error('[api/close] Error:', err.message);
       res.status(400).json({ error: err.message });
     }
   },
@@ -130,6 +153,47 @@ const ApiController = {
     } catch (err) {
       console.error('[api/photo] Error:', err.message);
       return res.status(404).json({ error: 'Photo not found' });
+    }
+  },
+
+  async voicemail(req, res) {
+    const accountId = req.accountId;
+    const { voicemails } = forAccount(accountId);
+    const recording = voicemails.findById(req.params.voicemailId);
+
+    if (!recording || String(recording.lead_id) !== String(req.params.id)) {
+      return res.status(404).json({ error: 'Voicemail not found' });
+    }
+
+    try {
+      const object = await voicemailService.getVoicemailObject(recording);
+      if (!object?.body) {
+        return res.status(404).json({ error: 'Voicemail not found' });
+      }
+
+      res.setHeader('Content-Type', object.contentType || 'audio/mpeg');
+      res.setHeader('Cache-Control', 'private, no-store, max-age=0');
+      res.setHeader('X-Content-Type-Options', 'nosniff');
+      if (object.contentLength) {
+        res.setHeader('Content-Length', object.contentLength);
+      }
+
+      if (typeof object.body.pipe === 'function') {
+        object.body.on('error', (err) => {
+          console.error('[api/voicemail] Stream error:', err.message);
+          if (!res.headersSent) res.status(500).end();
+        });
+        return object.body.pipe(res);
+      }
+
+      const chunks = [];
+      for await (const chunk of object.body) {
+        chunks.push(Buffer.from(chunk));
+      }
+      return res.send(Buffer.concat(chunks));
+    } catch (err) {
+      console.error('[api/voicemail] Error:', err.message);
+      return res.status(404).json({ error: 'Voicemail not found' });
     }
   },
 };

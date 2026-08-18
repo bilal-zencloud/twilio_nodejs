@@ -6,6 +6,7 @@ export type LeadStatus =
   | 'captured'
   | 'pending_confirmation'
   | 'confirmed'
+  | 'human_follow_up'
   | 'opted_out'
   | 'closed';
 
@@ -19,6 +20,7 @@ export interface Lead {
   name: string | null;
   email: string | null;
   need_summary: string | null;
+  vehicle: string | null;
   preferred_time: string | null;
   location: string | null;
   appointment_type: AppointmentType | null;
@@ -29,6 +31,7 @@ export interface Lead {
   sms_consent_reply: string | null;
   sms_consent_source: string | null;
   call_sid: string | null;
+  last_activity_at: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -50,11 +53,23 @@ export interface Photo {
   url: string;
 }
 
+export interface Voicemail {
+  id: number;
+  lead_id: number;
+  call_sid: string | null;
+  recording_sid: string | null;
+  duration: number | null;
+  created_at: string;
+  url: string;
+}
+
 export interface LeadStats {
   total: number;
   pending: number;
   confirmed: number;
   active: number;
+  humanFollowUp?: number;
+  closed?: number;
 }
 
 export interface LeadsResponse {
@@ -80,6 +95,7 @@ export interface LeadDetailResponse {
   lead: Lead;
   messages: Message[];
   photos: Photo[];
+  voicemails: Voicemail[];
   appointmentTypes: Record<string, AppointmentType>;
 }
 

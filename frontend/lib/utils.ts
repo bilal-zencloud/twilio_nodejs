@@ -5,6 +5,7 @@ export function cn(...inputs: ClassValue[]) {
 }
 
 export function formatStatus(status: string): string {
+  if (status === 'human_follow_up') return 'Human Follow-Up';
   return status.replace(/_/g, ' ');
 }
 

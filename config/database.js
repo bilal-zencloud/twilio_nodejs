@@ -116,6 +116,40 @@ function migrateConsentSchema() {
   }
 }
 
+/** Human follow-up, inactivity, vehicle, voicemail recordings. */
+function migrateHandoffSchema() {
+  if (!columnExists('leads', 'vehicle')) {
+    db.exec('ALTER TABLE leads ADD COLUMN vehicle TEXT');
+  }
+  if (!columnExists('leads', 'last_activity_at')) {
+    db.exec('ALTER TABLE leads ADD COLUMN last_activity_at TEXT');
+    db.exec(
+      `UPDATE leads SET last_activity_at = COALESCE(updated_at, created_at)
+       WHERE last_activity_at IS NULL`
+    );
+  }
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS lead_voicemails (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      account_id TEXT NOT NULL,
+      lead_id INTEGER NOT NULL,
+      call_sid TEXT,
+      recording_sid TEXT,
+      file_path TEXT,
+      twilio_url TEXT,
+      duration INTEGER,
+      storage TEXT NOT NULL DEFAULT 's3',
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (account_id) REFERENCES accounts(id),
+      FOREIGN KEY (lead_id) REFERENCES leads(id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_lead_voicemails_account ON lead_voicemails(account_id);
+    CREATE INDEX IF NOT EXISTS idx_lead_voicemails_lead ON lead_voicemails(account_id, lead_id);
+  `);
+}
+
 function initializeSchema() {
   migrateSchema();
 
@@ -145,6 +179,8 @@ function initializeSchema() {
       sms_consent_method TEXT,
       sms_consent_reply TEXT,
       sms_consent_source TEXT,
+      vehicle TEXT,
+      last_activity_at TEXT NOT NULL DEFAULT (datetime('now')),
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       updated_at TEXT NOT NULL DEFAULT (datetime('now')),
       FOREIGN KEY (account_id) REFERENCES accounts(id)
@@ -186,6 +222,7 @@ function initializeSchema() {
   migrateWave2Schema();
   migrateAdminsAndStorage();
   migrateConsentSchema();
+  migrateHandoffSchema();
 }
 
 function loadSeedJson(filename) {

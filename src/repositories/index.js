@@ -7,6 +7,7 @@ const LeadRepository = require('./LeadRepository');
 const LeadPhotoRepository = require('./LeadPhotoRepository');
 const MessageRepository = require('./MessageRepository');
 const PromptConfigRepository = require('./PromptConfigRepository');
+const VoicemailRepository = require('./VoicemailRepository');
 
 function forAccount(accountId) {
   return {
@@ -14,6 +15,7 @@ function forAccount(accountId) {
     photos: new LeadPhotoRepository(accountId),
     messages: new MessageRepository(accountId),
     prompts: new PromptConfigRepository(accountId),
+    voicemails: new VoicemailRepository(accountId),
   };
 }
 
@@ -23,5 +25,6 @@ module.exports = {
   LeadPhotoRepository,
   MessageRepository,
   PromptConfigRepository,
+  VoicemailRepository,
   forAccount,
 };

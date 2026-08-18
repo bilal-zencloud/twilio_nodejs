@@ -90,6 +90,12 @@ export async function confirmLead(id: string | number, payload: ConfirmPayload) 
   });
 }
 
+export async function closeLead(id: string | number) {
+  return clientFetch<{ success: boolean; lead: Lead }>(`/api/leads/${id}/close`, {
+    method: 'POST',
+  });
+}
+
 export async function login(email: string, password: string) {
   return clientFetch<{ admin: AdminProfile }>('/api/auth/login', {
     method: 'POST',

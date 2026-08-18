@@ -9,6 +9,7 @@ const STATUS_STYLES: Record<LeadStatus, string> = {
   captured: 'bg-emerald-50 text-emerald-700 ring-emerald-200',
   pending_confirmation: 'bg-amber-50 text-amber-800 ring-amber-200',
   confirmed: 'bg-teal-50 text-teal-800 ring-teal-200',
+  human_follow_up: 'bg-indigo-50 text-indigo-800 ring-indigo-200',
   opted_out: 'bg-stone-100 text-stone-600 ring-stone-300',
   closed: 'bg-slate-100 text-slate-600 ring-slate-200',
 };
@@ -25,11 +26,13 @@ export function StatusBadge({ status, className, pulse }: StatusBadgeProps) {
       className={cn(
         'inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-semibold capitalize ring-1 ring-inset',
         STATUS_STYLES[status],
-        pulse && status === 'pending_confirmation' && 'animate-pulse',
+        pulse &&
+          (status === 'pending_confirmation' || status === 'human_follow_up') &&
+          'animate-pulse',
         className
       )}
     >
-      {status === 'pending_confirmation' && (
+      {(status === 'pending_confirmation' || status === 'human_follow_up') && (
         <span className="h-1.5 w-1.5 rounded-full bg-amber-500" />
       )}
       {formatStatus(status)}

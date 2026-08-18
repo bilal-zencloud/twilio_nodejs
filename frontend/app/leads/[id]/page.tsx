@@ -24,6 +24,7 @@ export default async function LeadPage({ params }: PageProps) {
             initialLead={data.lead}
             messages={data.messages}
             photos={data.photos}
+            voicemails={data.voicemails || []}
             accountId={data.accountId}
             appointmentTypes={data.appointmentTypes}
           />
