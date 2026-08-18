@@ -30,6 +30,20 @@ const GREETING_AUDIO_FILE = path.join(__dirname, '../../assets/audio/voicemail-g
 /** Inbound CallSids whose owner-leg was detected as carrier voicemail. */
 const machineAnswerByCallSid = new Set();
 
+/** After a miss, AT&T often dumps the next Twilio callback to VM with no ring. */
+const RECENT_MISS_MS = 5 * 60 * 1000;
+const recentOwnerMissAt = new Map();
+
+function noteOwnerMiss(from) {
+  const key = last10Digits(from);
+  if (key) recentOwnerMissAt.set(key, Date.now());
+}
+
+function hadRecentOwnerMiss(from) {
+  const at = recentOwnerMissAt.get(last10Digits(from));
+  return Boolean(at && Date.now() - at < RECENT_MISS_MS);
+}
+
 function last10Digits(phone) {
   return String(phone || '').replace(/\D/g, '').slice(-10);
 }
@@ -75,6 +89,7 @@ function appendVoicemailTwiML(response) {
  */
 async function startVoicemailAndOptIn({ response, res, from, to, callSid, logPrefix }) {
   markPendingOptIn(callSid);
+  noteOwnerMiss(from);
   appendVoicemailTwiML(response);
   res.type('text/xml');
   res.send(response.toString());
@@ -179,18 +194,35 @@ const WebhookController = {
       return;
     }
 
+    if (ownerPhone && hadRecentOwnerMiss(From)) {
+      console.log('[voice/incoming] Recent miss from this caller — skipping Dial to avoid AT&T voicemail');
+      await startVoicemailAndOptIn({
+        response,
+        res,
+        from: From,
+        to: To,
+        callSid: CallSid,
+        logPrefix: '[voice/incoming]',
+      });
+      return;
+    }
+
     if (ownerPhone) {
       const amdUrl = `${config.appUrl.replace(/\/$/, '')}/webhooks/voice/amd-status`;
+      // Show the real caller on Devin's phone. Twilio's number looks like spam
+      // to AT&T and often goes straight to carrier voicemail with no ring.
+      const dialCallerId = From && String(From).startsWith('+') ? From : config.twilio.phoneNumber;
       const dial = response.dial({
         timeout: config.twilio.ownerRingTimeoutSeconds,
         action: '/webhooks/voice/dial-result',
         method: 'POST',
-        callerId: config.twilio.phoneNumber || undefined,
+        callerId: dialCallerId || undefined,
         answerOnBridge: true,
       });
       dial.number(
         {
           machineDetection: 'Enable',
+          machineDetectionTimeout: 5,
           amdStatusCallback: amdUrl,
           amdStatusCallbackMethod: 'POST',
         },
@@ -200,7 +232,7 @@ const WebhookController = {
       res.type('text/xml');
       res.send(response.toString());
       console.log(
-        `[voice/incoming] Dialing owner ${ownerPhone} (${config.twilio.ownerRingTimeoutSeconds}s) for ${From}`
+        `[voice/incoming] Dialing owner ${ownerPhone} (${config.twilio.ownerRingTimeoutSeconds}s) for ${From} callerId=${dialCallerId}`
       );
       return;
     }
