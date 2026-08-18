@@ -19,7 +19,7 @@ const config = {
     validateSignature: process.env.TWILIO_VALIDATE_SIGNATURE !== 'false',
     // Owner/shop phone — dial first so someone can pick up before voicemail/opt-in
     ownerPhoneNumber: process.env.OWNER_PHONE_NUMBER || null,
-    ownerRingTimeoutSeconds: parseInt(process.env.OWNER_RING_TIMEOUT_SECONDS || '25', 10),
+    ownerRingTimeoutSeconds: parseInt(process.env.OWNER_RING_TIMEOUT_SECONDS || '15', 10),
   },
 
   anthropic: {

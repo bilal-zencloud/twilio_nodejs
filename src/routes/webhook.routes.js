@@ -13,6 +13,7 @@ router.use(webhookLogger);
 // Voice: ring owner first (optional), then voicemail / opt-in on miss
 router.post('/voice/incoming', twilioValidator, WebhookController.handleIncomingCall);
 router.post('/voice/dial-result', twilioValidator, WebhookController.handleDialResult);
+router.post('/voice/amd-status', twilioValidator, WebhookController.handleAmdStatus);
 router.post('/voice/voicemail-complete', twilioValidator, WebhookController.handleVoicemailComplete);
 router.post('/voice/status', twilioValidator, WebhookController.handleCallStatus);
 

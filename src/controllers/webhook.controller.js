@@ -27,6 +27,28 @@ const { STATUSES } = LeadRepository;
 
 const GREETING_AUDIO_FILE = path.join(__dirname, '../../assets/audio/voicemail-greeting.mp3');
 
+/** Inbound CallSids whose owner-leg was detected as carrier voicemail. */
+const machineAnswerByCallSid = new Set();
+
+function last10Digits(phone) {
+  return String(phone || '').replace(/\D/g, '').slice(-10);
+}
+
+function samePhone(a, b) {
+  const left = last10Digits(a);
+  const right = last10Digits(b);
+  return Boolean(left && left.length === 10 && left === right);
+}
+
+function isMachineAnswer(answeredBy) {
+  const value = String(answeredBy || '').toLowerCase();
+  return value.includes('machine') || value === 'fax';
+}
+
+function getTwilioClient() {
+  return twilio(config.twilio.accountSid, config.twilio.authToken);
+}
+
 function appendVoicemailTwiML(response) {
   if (fs.existsSync(GREETING_AUDIO_FILE)) {
     const audioUrl = `${config.appUrl.replace(/\/$/, '')}${consentCopy.VOICEMAIL_GREETING_AUDIO_PATH}`;
@@ -126,7 +148,23 @@ const WebhookController = {
     console.log(`[voice/incoming] From=${From} To=${To} CallSid=${CallSid} owner=${ownerPhone || 'none'}`);
     touchIncomingCall({ from: From, to: To, callSid: CallSid });
 
+    // Calling from Devin's own cell cannot ring that same phone — AT&T voicemail
+    // answers and the caller sits in silence. Play our greeting instead.
+    if (ownerPhone && samePhone(From, ownerPhone)) {
+      console.log('[voice/incoming] Caller is the owner number — skipping Dial, playing greeting');
+      await startVoicemailAndOptIn({
+        response,
+        res,
+        from: From,
+        to: To,
+        callSid: CallSid,
+        logPrefix: '[voice/incoming]',
+      });
+      return;
+    }
+
     if (ownerPhone) {
+      const amdUrl = `${config.appUrl.replace(/\/$/, '')}/webhooks/voice/amd-status`;
       const dial = response.dial({
         timeout: config.twilio.ownerRingTimeoutSeconds,
         action: '/webhooks/voice/dial-result',
@@ -134,7 +172,14 @@ const WebhookController = {
         callerId: config.twilio.phoneNumber || undefined,
         answerOnBridge: true,
       });
-      dial.number(ownerPhone);
+      dial.number(
+        {
+          machineDetection: 'Enable',
+          amdStatusCallback: amdUrl,
+          amdStatusCallbackMethod: 'POST',
+        },
+        ownerPhone
+      );
 
       res.type('text/xml');
       res.send(response.toString());
@@ -155,15 +200,20 @@ const WebhookController = {
   },
 
   /**
-   * Dial finished. If the owner answered, end quietly. If not, play recording + send opt-in.
+   * Dial finished. If the owner answered, end quietly. If not (or carrier
+   * voicemail answered), play our recording + send opt-in.
    */
   async handleDialResult(req, res) {
     const { DialCallStatus, From, To, CallSid } = req.body;
     const response = new VoiceResponse();
+    const carrierVoicemail = machineAnswerByCallSid.has(CallSid);
+    machineAnswerByCallSid.delete(CallSid);
 
-    console.log(`[voice/dial-result] DialCallStatus=${DialCallStatus} CallSid=${CallSid}`);
+    console.log(
+      `[voice/dial-result] DialCallStatus=${DialCallStatus} CallSid=${CallSid} carrierVoicemail=${carrierVoicemail}`
+    );
 
-    if (!DIAL_MISSED.has(DialCallStatus)) {
+    if (!DIAL_MISSED.has(DialCallStatus) && !carrierVoicemail) {
       response.hangup();
       res.type('text/xml');
       return res.send(response.toString());
@@ -177,6 +227,33 @@ const WebhookController = {
       callSid: CallSid,
       logPrefix: '[voice/dial-result]',
     });
+  },
+
+  /**
+   * AMD callback while ringing Devin. If AT&T voicemail picked up, drop that
+   * leg so Dial ends and our greeting can play.
+   */
+  async handleAmdStatus(req, res) {
+    res.sendStatus(200);
+
+    const { AnsweredBy, CallSid, ParentCallSid } = req.body;
+    console.log(
+      `[voice/amd] AnsweredBy=${AnsweredBy} CallSid=${CallSid} ParentCallSid=${ParentCallSid}`
+    );
+
+    if (!isMachineAnswer(AnsweredBy)) return;
+
+    const inboundSid = ParentCallSid || CallSid;
+    if (inboundSid) machineAnswerByCallSid.add(inboundSid);
+
+    try {
+      if (CallSid) {
+        await getTwilioClient().calls(CallSid).update({ status: 'completed' });
+        console.log(`[voice/amd] Hung up carrier-voicemail leg ${CallSid}`);
+      }
+    } catch (err) {
+      console.error('[voice/amd] Failed to drop owner leg:', err.message);
+    }
   },
 
   /**
